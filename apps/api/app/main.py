@@ -6,7 +6,7 @@ from sqlalchemy import select
 from .voice import MockVoiceProvider, build_voice_script
 from .approvals import ApprovalDecision
 from .action_gate import ActionEnvironment, ActionStatus, evaluate_action
-from .db import Base, engine, session_scope
+from .db import session_scope
 from .models import SystemRecord, EventRecord, ApprovalRecord, VoiceCallRecord, ActionRecord, AuditRecord
 from .auth import Principal, authenticate, require_scope
 from .bootstrap import bootstrap_admin
@@ -17,7 +17,6 @@ voice_provider = MockVoiceProvider()
 
 @app.on_event("startup")
 def startup() -> None:
-    Base.metadata.create_all(bind=engine)
     bootstrap_admin()
 
 
