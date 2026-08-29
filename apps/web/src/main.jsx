@@ -5,23 +5,16 @@ import './styles.css';
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
-  const [status, setStatus] = useState(null);
-  const [systems, setSystems] = useState([]);
-  const [events, setEvents] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [statusData, systemsData, eventsData] = await Promise.all([
-          fetch(`${API}/api/v1/status`).then(r => r.json()),
-          fetch(`${API}/api/v1/systems`).then(r => r.json()),
-          fetch(`${API}/api/v1/watch/events`).then(r => r.json()),
-        ]);
-        setStatus(statusData);
-        setSystems(systemsData);
-        setEvents(eventsData);
+        const response = await fetch(`${API}/api/v1/dashboard`);
+        if (!response.ok) throw new Error('dashboard unavailable');
+        setDashboard(await response.json());
       } catch {
-        setStatus({ core: 'offline' });
+        setDashboard(null);
       }
     };
     load();
@@ -29,11 +22,13 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
+  const systems = dashboard?.systems || [];
+  const events = dashboard?.events || [];
   const critical = events.filter(event => event.priority === 'P1' || event.priority === 'P2');
   const modules = [
-    ['CORE', status?.core?.toUpperCase() || 'CHECKING', 'Orchestrator'],
-    ['WATCH', status ? 'ONLINE' : 'CHECKING', `${events.length} events received`],
-    ['CONNECT', 'READY', `${systems.length} systems connected`],
+    ['CORE', dashboard?.core?.toUpperCase() || 'CHECKING', 'Orchestrator'],
+    ['WATCH', dashboard ? 'ONLINE' : 'CHECKING', `${events.length} events received`],
+    ['CONNECT', dashboard ? 'READY' : 'CHECKING', `${systems.length} systems connected`],
     ['VOICE', 'PLANNED', `${critical.length} escalations waiting`],
   ];
 
@@ -41,11 +36,11 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div><p className="eyebrow">AI OPERATIONS CENTER</p><h1>VOLT CORE</h1></div>
-        <div className="system-status">{status?.core === 'online' ? 'SYSTEM ONLINE' : 'SYSTEM CHECK'}</div>
+        <div className="system-status">{dashboard?.core === 'online' ? 'SYSTEM ONLINE' : 'SYSTEM CHECK'}</div>
       </header>
       <section className="core-card">
         <div className="core-orb">VOLT</div>
-        <div><p className="eyebrow">CENTRAL INTELLIGENCE</p><h2>Observe. Analyse. Coordinate.</h2><p>Mode: {status?.mode || 'starting'}. Production writes: {status?.production_write ? 'enabled' : 'disabled'}.</p></div>
+        <div><p className="eyebrow">CENTRAL INTELLIGENCE</p><h2>Observe. Analyse. Coordinate.</h2><p>Mode: {dashboard?.mode || 'starting'}. Production writes: {dashboard?.production_write ? 'enabled' : 'disabled'}.</p></div>
       </section>
       <section className="module-grid">
         {modules.map(([name, moduleStatus, description]) => <article className="module-card" key={name}><div className="module-header"><h3>VOLT {name}</h3><span className="status">{moduleStatus}</span></div><p>{description}</p></article>)}
