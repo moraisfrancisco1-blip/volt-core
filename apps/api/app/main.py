@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select
-from .voice import MockVoiceProvider, build_voice_script
+from .voice import get_voice_provider, build_voice_script
 from .approvals import ApprovalDecision
 from .action_gate import ActionEnvironment, ActionStatus, evaluate_action
 from .db import session_scope
@@ -22,7 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(event_history_router)
-voice_provider = MockVoiceProvider()
+voice_provider = get_voice_provider()
 
 
 @app.on_event("startup")
