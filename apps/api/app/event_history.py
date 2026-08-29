@@ -19,7 +19,7 @@ SEVERITY_PRIORITY = {
     "low": "P4",
     "info": "P4",
 }
-ACTION_BY_PRIORITY = {"P1": "call", "P2": "approval", "P3": "notify", "P4": "digest"}
+ACTION_BY_PRIORITY = {"P1": "call", "P2": "call", "P3": "call", "P4": "digest"}
 VALID_STATUSES = {"active", "acknowledged", "resolved"}
 
 
