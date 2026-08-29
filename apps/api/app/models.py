@@ -4,6 +4,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
 
+class ApiClientRecord(Base):
+    __tablename__ = "api_clients"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    environment: Mapped[str] = mapped_column(String(32), default="production")
+    scopes: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class SystemRecord(Base):
     __tablename__ = "systems"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
