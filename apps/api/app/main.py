@@ -38,7 +38,8 @@ class Priority(str, Enum):
 
 
 LEVEL_PRIORITY = {"CRITICAL": Priority.P1, "ERROR": Priority.P2, "WARNING": Priority.P3, "INFO": Priority.P4}
-ACTION_BY_PRIORITY = {Priority.P1: "call", Priority.P2: "approval", Priority.P3: "notify", Priority.P4: "digest"}
+ACTION_BY_PRIORITY = {Priority.P1: "call", Priority.P2: "call", Priority.P3: "call", Priority.P4: "digest"}
+VOICE_PRIORITIES = {"P1", "P2", "P3"}
 
 
 class SystemRegistration(BaseModel):
@@ -158,7 +159,7 @@ def list_events(limit: int = 50) -> list[dict]:
 @app.get("/api/v1/watch/escalations", dependencies=[Depends(require_scope("watch:read"))])
 def escalations() -> list[dict]:
     with session_scope() as session:
-        events = session.scalars(select(EventRecord).where(EventRecord.priority.in_(["P1", "P2"])).order_by(EventRecord.id.desc())).all()
+        events = session.scalars(select(EventRecord).where(EventRecord.priority.in_(["P1", "P2", "P3"])).order_by(EventRecord.id.desc())).all()
         return [event_dict(item) for item in events]
 
 
@@ -169,8 +170,8 @@ def request_voice_call(request: VoiceCallRequest) -> dict:
         if event is None:
             raise HTTPException(status_code=404, detail="event not found")
         data = event_dict(event)
-        if data["priority"] != "P1":
-            raise HTTPException(status_code=422, detail="voice calls are reserved for P1 events")
+        if data["priority"] not in VOICE_PRIORITIES:
+            raise HTTPException(status_code=422, detail="voice calls are reserved for P1, P2 and P3 events")
         script = build_voice_script(data)
         result = voice_provider.place_call(request.to, script)
         call = VoiceCallRecord(event_id=event.id, status=result["status"], provider=result["provider"], destination=request.to, script=script)
