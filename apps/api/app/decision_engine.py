@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from sqlalchemy import select
 
@@ -43,15 +42,7 @@ def decide_event(session, *, severity: str, system_id: str, environment: str, ev
                 reasons.append(f"keyword escalation: {keyword}")
 
     window_start = now - timedelta(minutes=10)
-    recent = session.scalars(
-        select(EventRecord).where(
-            EventRecord.system_id == system_id,
-            EventRecord.environment == environment,
-            EventRecord.created_at >= window_start,
-            EventRecord.status != "resolved",
-        )
-    ).all()
-
+    recent = session.scalars(select(EventRecord).where(EventRecord.system_id == system_id, EventRecord.environment == environment, EventRecord.created_at >= window_start, EventRecord.status != "resolved")).all()
     fingerprint = (event_type or "", (title or "").strip().lower(), message.strip().lower())
     same = [item for item in recent if ((item.event_type or ""), (item.title or "").strip().lower(), item.message.strip().lower()) == fingerprint]
     duplicate = len(same) > 0
@@ -60,16 +51,34 @@ def decide_event(session, *, severity: str, system_id: str, environment: str, ev
         priority = _max_priority(priority, "P2")
         reasons.append(f"repeated active incident ({len(same) + 1} occurrences in 10m)")
 
-    # If the same active system has several different incidents, the operational risk rises.
     distinct_recent = {(item.event_type or "", (item.title or "").strip().lower()) for item in recent}
     if len(distinct_recent) >= 3:
         priority = _max_priority(priority, "P2")
         reasons.append(f"incident burst ({len(distinct_recent)} active incident types in 10m)")
 
-    # A critical event occurring while the system is already degraded is treated as an immediate P1.
     if severity == "critical":
         priority = "P1"
-        if "critical incident" not in reasons:
-            reasons.append("critical incident")
+        reasons.append("critical incident")
 
-    return Decision(priority=priority, action=ACTION_BY_PRIORITY[priority], reason="; ".join(reasons), duplicate=duplicate)
+    return Decision(priority=priority, action=ACTION_BY_PRIORITY[priority], reason="; ".join(dict.fromkeys(reasons)), duplicate=duplicate)
+
+
+def validate_decision_matrix() -> list[dict]:
+    cases = [
+        ("critical", "routine", "critical service failure", "P1", "call"),
+        ("high", "routine", "service unavailable", "P2", "call"),
+        ("medium", "routine", "degraded performance", "P3", "call"),
+        ("low", "routine", "minor informational notice", "P4", "digest"),
+        ("info", "routine", "informational update", "P4", "digest"),
+        ("low", "security breach", "access incident", "P1", "call"),
+    ]
+    results = []
+    for severity, event_type, message, expected_priority, expected_action in cases:
+        priority = BASE_PRIORITY[severity]
+        text = f"{event_type} {message}".lower()
+        for keyword, candidate in KEYWORD_ESCALATION.items():
+            if keyword in text: priority = _max_priority(priority, candidate)
+        if severity == "critical": priority = "P1"
+        action = ACTION_BY_PRIORITY[priority]
+        results.append({"severity": severity, "expected_priority": expected_priority, "actual_priority": priority, "expected_action": expected_action, "actual_action": action, "ok": priority == expected_priority and action == expected_action})
+    return results
