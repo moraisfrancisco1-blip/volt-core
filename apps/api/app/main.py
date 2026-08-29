@@ -4,12 +4,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from .voice import MockVoiceProvider, build_voice_script
 from .approvals import ApprovalDecision, apply_decision, create_approval
+from .action_gate import ActionEnvironment, ActionStatus, evaluate_action
 
-app = FastAPI(title="VOLT CORE", version="0.5.0")
+app = FastAPI(title="VOLT CORE", version="0.6.0")
 SYSTEMS = {}
 EVENTS = []
 CALLS = []
 APPROVALS = []
+ACTIONS = []
 AUDIT_LOG = []
 voice_provider = MockVoiceProvider()
 
@@ -50,6 +52,11 @@ class ApprovalDecisionRequest(BaseModel):
     decision: ApprovalDecision
 
 
+class ActionRequest(BaseModel):
+    approval_id: int
+    environment: ActionEnvironment = ActionEnvironment.STAGING
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "online", "service": "volt-core"}
@@ -57,7 +64,7 @@ def health() -> dict:
 
 @app.get("/api/v1/status")
 def status() -> dict:
-    return {"core": "online", "mode": "observe", "production_write": False, "systems": len(SYSTEMS), "events": len(EVENTS), "calls": len(CALLS), "approvals": len(APPROVALS)}
+    return {"core": "online", "mode": "observe", "production_write": False, "systems": len(SYSTEMS), "events": len(EVENTS), "calls": len(CALLS), "approvals": len(APPROVALS), "actions": len(ACTIONS)}
 
 
 @app.post("/api/v1/systems")
@@ -138,6 +145,26 @@ def decide_approval(approval_id: int, request: ApprovalDecisionRequest) -> dict:
 @app.get("/api/v1/approvals")
 def list_approvals() -> list[dict]:
     return list(reversed(APPROVALS))
+
+
+@app.post("/api/v1/actions")
+def request_action(request: ActionRequest) -> dict:
+    approval = next((item for item in APPROVALS if item["id"] == request.approval_id), None)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    action = evaluate_action(approval, request.environment)
+    action["id"] = len(ACTIONS) + 1
+    if action["status"] == ActionStatus.READY.value:
+        action["status"] = ActionStatus.EXECUTED.value
+        action["executed_at"] = datetime.now(timezone.utc).isoformat()
+    ACTIONS.append(action)
+    AUDIT_LOG.append({"type": "action_evaluated", "action_id": action["id"], "status": action["status"], "created_at": datetime.now(timezone.utc).isoformat()})
+    return action
+
+
+@app.get("/api/v1/actions")
+def list_actions() -> list[dict]:
+    return list(reversed(ACTIONS))
 
 
 @app.get("/api/v1/audit")
