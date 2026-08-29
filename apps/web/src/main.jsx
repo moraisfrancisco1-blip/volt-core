@@ -1,15 +1,41 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const modules = [
-  ['CORE', 'ONLINE', 'Orchestrator'],
-  ['WATCH', 'STANDBY', 'Production monitoring'],
-  ['CONNECT', 'READY', 'System connectors'],
-  ['VOICE', 'OFFLINE', 'Phone communication'],
-];
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
+  const [status, setStatus] = useState(null);
+  const [systems, setSystems] = useState([]);
+  const [events, setEvents] = useState([]);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [statusData, systemsData, eventsData] = await Promise.all([
+          fetch(`${API}/api/v1/status`).then(r => r.json()),
+          fetch(`${API}/api/v1/systems`).then(r => r.json()),
+          fetch(`${API}/api/v1/watch/events`).then(r => r.json()),
+        ]);
+        setStatus(statusData);
+        setSystems(systemsData);
+        setEvents(eventsData);
+      } catch (error) {
+        setStatus({ core: 'offline' });
+      }
+    };
+    load();
+    const timer = setInterval(load, 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const modules = [
+    ['CORE', status?.core?.toUpperCase() || 'CHECKING', 'Orchestrator'],
+    ['WATCH', status ? 'ONLINE' : 'CHECKING', `${events.length} events received`],
+    ['CONNECT', 'READY', `${systems.length} systems connected`],
+    ['VOICE', 'OFFLINE', 'Phone communication'],
+  ];
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -17,30 +43,36 @@ function App() {
           <p className="eyebrow">AI OPERATIONS CENTER</p>
           <h1>VOLT CORE</h1>
         </div>
-        <div className="system-status">SYSTEM ONLINE</div>
+        <div className="system-status">{status?.core === 'online' ? 'SYSTEM ONLINE' : 'SYSTEM CHECK'}</div>
       </header>
       <section className="core-card">
         <div className="core-orb">VOLT</div>
         <div>
           <p className="eyebrow">CENTRAL INTELLIGENCE</p>
           <h2>Observe. Analyse. Coordinate.</h2>
-          <p>Production mode is protected. Autonomous writes are disabled.</p>
+          <p>Mode: {status?.mode || 'starting'}. Production writes: {status?.production_write ? 'enabled' : 'disabled'}.</p>
         </div>
       </section>
       <section className="module-grid">
-        {modules.map(([name, status, description]) => (
+        {modules.map(([name, moduleStatus, description]) => (
           <article className="module-card" key={name}>
             <div className="module-header">
               <h3>VOLT {name}</h3>
-              <span className="status">{status}</span>
+              <span className="status">{moduleStatus}</span>
             </div>
             <p>{description}</p>
           </article>
         ))}
       </section>
       <section className="activity-card">
-        <p className="eyebrow">ACTIVITY</p>
-        <div className="empty-state">Waiting for the first connected system.</div>
+        <p className="eyebrow">LIVE ACTIVITY</p>
+        {events.length === 0 ? (
+          <div className="empty-state">Waiting for the first event.</div>
+        ) : events.map(event => (
+          <div className="event-row" key={event.id}>
+            <strong>{event.level}</strong> · {event.system} · {event.message}
+          </div>
+        ))}
       </section>
     </main>
   );
