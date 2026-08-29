@@ -39,6 +39,7 @@ function App() {
   }, [load]);
 
   const systems = dashboard?.systems || [];
+  const monitorTargets = dashboard?.monitoring?.targets || [];
   const activeEscalations = escalations.filter(item => !['completed', 'cancelled'].includes(item.status));
   const activeCritical = activeEscalations.filter(item => ['P1', 'P2'].includes(item.priority));
   const activeCalls = activeEscalations.filter(item => item.action === 'call');
@@ -66,6 +67,11 @@ function App() {
         <p className="eyebrow">ESCALATION QUEUE</p>
         <h2>{activeCritical.length} critical items</h2>
         <p>{activeEscalations.length} active escalations · P1 = phone call · P2 = approval required · P3 = notification · P4 = digest</p>
+      </section>
+      <section className="activity-card">
+        <p className="eyebrow">MONITORING RUNTIME</p>
+        <p>{dashboard?.monitoring?.started ? 'Monitor active' : 'Monitor not started'} · {dashboard?.monitoring?.target_count ?? 0} target(s) · every {dashboard?.monitoring?.interval_seconds ?? '—'} seconds</p>
+        {monitorTargets.length === 0 ? <div className="empty-state">Waiting for a configured monitoring target.</div> : monitorTargets.map(target => <div className="event-row" key={target.system_id}><strong>{target.last_ok === true ? 'ONLINE' : target.last_ok === false ? 'CHECK FAILED' : 'CHECKING'}</strong> · {target.system_name} · last check {target.last_checked_at ? new Date(target.last_checked_at).toLocaleString() : 'pending'} · failures {target.consecutive_failures} · {target.last_detail || 'no result yet'}</div>)}
       </section>
       <section className="activity-card">
         <p className="eyebrow">MONITORED SYSTEMS</p>
