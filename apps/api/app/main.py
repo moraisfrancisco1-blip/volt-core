@@ -12,7 +12,7 @@ from .models import SystemRecord, EventRecord, ApprovalRecord, VoiceCallRecord, 
 from .auth import Principal, authenticate, require_scope
 from .bootstrap import bootstrap_admin
 from .event_history import router as event_history_router
-from .monitoring import start_monitoring
+from .monitoring import start_monitoring, monitoring_status
 
 app = FastAPI(title="VOLT CORE", version="1.1.0")
 app.add_middleware(
@@ -91,6 +91,11 @@ def health() -> dict:
     return {"status": "online", "service": "volt-core", "database": "postgresql"}
 
 
+@app.get("/api/v1/monitoring")
+def monitoring() -> dict:
+    return monitoring_status()
+
+
 @app.get("/api/v1/dashboard")
 def dashboard() -> dict:
     with session_scope() as session:
@@ -101,6 +106,7 @@ def dashboard() -> dict:
             "core": "online", "mode": "observe", "production_write": False,
             "systems": [{"name": item.name, "environment": item.environment, "status": item.status, "updated_at": item.updated_at.isoformat() if item.updated_at else None} for item in systems],
             "events": [event_dict(item) for item in events], "critical_count": len(critical),
+            "monitoring": monitoring_status(),
         }
 
 
@@ -113,7 +119,7 @@ def status() -> dict:
 @app.post("/api/v1/systems", dependencies=[Depends(require_scope("systems:write"))])
 def register_system(system: SystemRegistration, principal: Principal = Depends(authenticate)) -> dict:
     if principal.environment != system.environment and "*" not in principal.scopes:
-        raise HTTPException(status_code=403, detail="client cannot register systems in another environment")
+        raise HTTPException(status_code=403, detail="client cannot register systems to another environment")
     with session_scope() as session:
         record = session.scalar(select(SystemRecord).where(SystemRecord.name == system.name))
         if record is None:
