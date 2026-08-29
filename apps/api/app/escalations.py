@@ -6,12 +6,14 @@ from sqlalchemy import select
 
 from .auth import Principal, authenticate, require_scope
 from .db import session_scope
-from .models import AuditRecord, EscalationRecord, EventRecord
+from .models import AuditRecord, EscalationRecord, EventRecord, VoiceCallRecord
+from .voice import build_voice_script, get_operator_phone_number, get_voice_provider
 
 router = APIRouter(tags=["escalations"])
 
 ACTIVE_STATUSES = {"queued", "acknowledged", "dispatched"}
 VALID_STATUSES = ACTIVE_STATUSES | {"completed", "cancelled"}
+PHONE_CALL_PRIORITIES = {"P1", "P2", "P3"}
 
 
 class EscalationUpdate(BaseModel):
@@ -52,6 +54,61 @@ def queue_escalation(session, event: EventRecord) -> EscalationRecord:
         )
     )
     return record
+
+
+def dispatch_phone_call(session, event: EventRecord, escalation: EscalationRecord) -> VoiceCallRecord | None:
+    if event.priority not in PHONE_CALL_PRIORITIES or event.recommended_action != "call":
+        return None
+    existing = session.scalar(select(VoiceCallRecord).where(VoiceCallRecord.event_id == event.id))
+    if existing is not None:
+        return existing
+    destination = get_operator_phone_number()
+    if not destination:
+        session.add(
+            AuditRecord(
+                type="voice_call_skipped",
+                reference_id=str(event.id),
+                detail="operator phone number is not configured",
+            )
+        )
+        return None
+    event_data = {
+        "priority": event.priority,
+        "system": event.system,
+        "message": event.message,
+        "recommended_action": event.recommended_action,
+    }
+    script = build_voice_script(event_data)
+    try:
+        result = get_voice_provider().place_call(destination, script)
+    except Exception as exc:
+        session.add(
+            AuditRecord(
+                type="voice_call_failed",
+                reference_id=str(event.id),
+                detail=str(exc)[:500],
+            )
+        )
+        return None
+    call = VoiceCallRecord(
+        event_id=event.id,
+        status=result.get("status", "queued"),
+        provider=result.get("provider", "unknown"),
+        destination=destination,
+        script=script,
+    )
+    session.add(call)
+    session.flush()
+    escalation.status = "dispatched"
+    escalation.updated_at = datetime.now(timezone.utc)
+    session.add(
+        AuditRecord(
+            type="voice_call_dispatched",
+            reference_id=str(call.id),
+            detail=f"event={event.id} priority={event.priority} provider={call.provider}",
+        )
+    )
+    return call
 
 
 def sync_escalation_status(session, event: EventRecord) -> EscalationRecord | None:
