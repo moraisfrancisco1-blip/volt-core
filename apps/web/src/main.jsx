@@ -68,6 +68,10 @@ function App() {
         <p>{activeEscalations.length} active escalations · P1 = phone call · P2 = approval required · P3 = notification · P4 = digest</p>
       </section>
       <section className="activity-card">
+        <p className="eyebrow">MONITORED SYSTEMS</p>
+        {systems.length === 0 ? <div className="empty-state">Waiting for the first monitored system.</div> : systems.map(system => <div className="event-row" key={system.name}><strong>{system.status || 'unknown'}</strong> · {system.name} · {system.environment || 'production'} · last signal {system.updated_at ? new Date(system.updated_at).toLocaleString() : 'not available'}</div>)}
+      </section>
+      <section className="activity-card">
         <p className="eyebrow">LIVE ACTIVITY</p>
         {loading ? <div className="empty-state">Loading live data...</div> : error && !dashboard ? <div className="empty-state">Unable to load live data. Retrying automatically...</div> : events.length === 0 ? <div className="empty-state">Waiting for the first event.</div> : events.map(event => <div className="event-row" key={event.id}><strong>{(event.severity || event.priority || 'EVENT').toUpperCase()} {event.priority ? `· ${event.priority}` : ''}</strong> · {event.system_name || event.system_id || 'unknown system'} · {event.title || event.message} · {event.status || 'active'} · {event.recommended_action || 'review'}</div>)}
       </section>
