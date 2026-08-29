@@ -20,7 +20,7 @@ function App() {
         setStatus(statusData);
         setSystems(systemsData);
         setEvents(eventsData);
-      } catch (error) {
+      } catch {
         setStatus({ core: 'offline' });
       }
     };
@@ -29,50 +29,35 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
+  const critical = events.filter(event => event.priority === 'P1' || event.priority === 'P2');
   const modules = [
     ['CORE', status?.core?.toUpperCase() || 'CHECKING', 'Orchestrator'],
     ['WATCH', status ? 'ONLINE' : 'CHECKING', `${events.length} events received`],
     ['CONNECT', 'READY', `${systems.length} systems connected`],
-    ['VOICE', 'OFFLINE', 'Phone communication'],
+    ['VOICE', 'PLANNED', `${critical.length} escalations waiting`],
   ];
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">AI OPERATIONS CENTER</p>
-          <h1>VOLT CORE</h1>
-        </div>
+        <div><p className="eyebrow">AI OPERATIONS CENTER</p><h1>VOLT CORE</h1></div>
         <div className="system-status">{status?.core === 'online' ? 'SYSTEM ONLINE' : 'SYSTEM CHECK'}</div>
       </header>
       <section className="core-card">
         <div className="core-orb">VOLT</div>
-        <div>
-          <p className="eyebrow">CENTRAL INTELLIGENCE</p>
-          <h2>Observe. Analyse. Coordinate.</h2>
-          <p>Mode: {status?.mode || 'starting'}. Production writes: {status?.production_write ? 'enabled' : 'disabled'}.</p>
-        </div>
+        <div><p className="eyebrow">CENTRAL INTELLIGENCE</p><h2>Observe. Analyse. Coordinate.</h2><p>Mode: {status?.mode || 'starting'}. Production writes: {status?.production_write ? 'enabled' : 'disabled'}.</p></div>
       </section>
       <section className="module-grid">
-        {modules.map(([name, moduleStatus, description]) => (
-          <article className="module-card" key={name}>
-            <div className="module-header">
-              <h3>VOLT {name}</h3>
-              <span className="status">{moduleStatus}</span>
-            </div>
-            <p>{description}</p>
-          </article>
-        ))}
+        {modules.map(([name, moduleStatus, description]) => <article className="module-card" key={name}><div className="module-header"><h3>VOLT {name}</h3><span className="status">{moduleStatus}</span></div><p>{description}</p></article>)}
+      </section>
+      <section className="priority-card">
+        <p className="eyebrow">ESCALATION QUEUE</p>
+        <h2>{critical.length} critical items</h2>
+        <p>P1 = phone call · P2 = approval required · P3 = notification · P4 = digest</p>
       </section>
       <section className="activity-card">
         <p className="eyebrow">LIVE ACTIVITY</p>
-        {events.length === 0 ? (
-          <div className="empty-state">Waiting for the first event.</div>
-        ) : events.map(event => (
-          <div className="event-row" key={event.id}>
-            <strong>{event.level}</strong> · {event.system} · {event.message}
-          </div>
-        ))}
+        {events.length === 0 ? <div className="empty-state">Waiting for the first event.</div> : events.map(event => <div className="event-row" key={event.id}><strong>{event.priority || event.level}</strong> · {event.system} · {event.message} · {event.recommended_action || 'review'}</div>)}
       </section>
     </main>
   );
