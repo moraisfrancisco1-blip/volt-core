@@ -54,6 +54,17 @@ def queue_escalation(session, event: EventRecord) -> EscalationRecord:
     return record
 
 
+def sync_escalation_status(session, event: EventRecord) -> EscalationRecord | None:
+    record = session.scalar(select(EscalationRecord).where(EscalationRecord.event_id == event.id))
+    if record is None:
+        return None
+    target = "completed" if event.status == "resolved" else "acknowledged" if event.status == "acknowledged" else "queued"
+    if record.status != target:
+        record.status = target
+        record.updated_at = datetime.now(timezone.utc)
+    return record
+
+
 @router.get("/escalations")
 def list_escalations(
     limit: int = Query(default=50, ge=1, le=200),
