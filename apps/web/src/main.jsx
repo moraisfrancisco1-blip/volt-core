@@ -7,20 +7,24 @@ const API = (import.meta.env.VITE_API_URL || 'https://api-production-c073.up.rai
 function App() {
   const [dashboard, setDashboard] = useState(null);
   const [events, setEvents] = useState([]);
+  const [escalations, setEscalations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
+        fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
       ]);
       if (!dashboardResponse.ok) throw new Error(`dashboard unavailable (${dashboardResponse.status})`);
       if (!eventsResponse.ok) throw new Error(`event history unavailable (${eventsResponse.status})`);
+      if (!escalationsResponse.ok) throw new Error(`escalation queue unavailable (${escalationsResponse.status})`);
       setDashboard(await dashboardResponse.json());
       setEvents(await eventsResponse.json());
+      setEscalations(await escalationsResponse.json());
     } catch (err) {
       setError(err?.message || 'dashboard unavailable');
     } finally {
@@ -35,12 +39,14 @@ function App() {
   }, [load]);
 
   const systems = dashboard?.systems || [];
-  const activeCritical = events.filter(event => ['P1', 'P2'].includes(event.priority) && event.status !== 'resolved').length;
+  const activeEscalations = escalations.filter(item => !['completed', 'cancelled'].includes(item.status));
+  const activeCritical = activeEscalations.filter(item => ['P1', 'P2'].includes(item.priority));
+  const activeCalls = activeEscalations.filter(item => item.action === 'call');
   const modules = [
     ['CORE', dashboard?.core?.toUpperCase() || (loading ? 'CHECKING' : 'OFFLINE'), 'Orchestrator'],
     ['WATCH', dashboard ? 'ONLINE' : (loading ? 'CHECKING' : 'OFFLINE'), `${events.length} events received`],
     ['CONNECT', dashboard ? 'READY' : (loading ? 'CHECKING' : 'OFFLINE'), `${systems.length} systems connected`],
-    ['VOICE', 'PLANNED', `${activeCritical} escalations waiting`],
+    ['VOICE', activeCalls.length ? 'READY' : 'STANDBY', activeCalls.length ? `${activeCalls.length} P1 call${activeCalls.length === 1 ? '' : 's'} queued` : `${activeEscalations.length} escalations tracked`],
   ];
 
   return (
@@ -58,8 +64,8 @@ function App() {
       </section>
       <section className="priority-card">
         <p className="eyebrow">ESCALATION QUEUE</p>
-        <h2>{activeCritical} critical items</h2>
-        <p>P1 = phone call · P2 = approval required · P3 = notification · P4 = digest</p>
+        <h2>{activeCritical.length} critical items</h2>
+        <p>{activeEscalations.length} active escalations · P1 = phone call · P2 = approval required · P3 = notification · P4 = digest</p>
       </section>
       <section className="activity-card">
         <p className="eyebrow">LIVE ACTIVITY</p>

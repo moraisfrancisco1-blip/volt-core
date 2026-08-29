@@ -6,9 +6,11 @@ from sqlalchemy import select
 
 from .auth import Principal, authenticate, require_scope
 from .db import session_scope
+from .escalations import queue_escalation, router as escalation_router, sync_escalation_status
 from .models import AuditRecord, EventRecord, SystemRecord
 
 router = APIRouter(prefix="/api", tags=["events"])
+router.include_router(escalation_router)
 
 SEVERITY_PRIORITY = {
     "critical": "P1",
@@ -97,6 +99,7 @@ def create_event(session, payload: EventIngestion, principal: Principal) -> Even
     )
     session.add(record)
     session.flush()
+    queue_escalation(session, record)
     session.add(AuditRecord(type="event_received", reference_id=str(record.id), detail=f"{record.system} via {principal.name}"))
     return record
 
@@ -159,5 +162,6 @@ def update_event(event_id: int, update: EventUpdate, principal: Principal = Depe
         event.status = requested_status
         event.updated_at = datetime.now(timezone.utc)
         event.resolved_at = datetime.now(timezone.utc) if requested_status == "resolved" else None
+        sync_escalation_status(session, event)
         session.add(AuditRecord(type="event_status_updated", reference_id=str(event.id), detail=f"{requested_status} via {principal.name}"))
         return event_dict(event)
