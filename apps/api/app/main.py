@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select
 from .voice import MockVoiceProvider, build_voice_script
@@ -12,6 +13,16 @@ from .auth import Principal, authenticate, require_scope
 from .bootstrap import bootstrap_admin
 
 app = FastAPI(title="VOLT CORE", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://volt-core.vercel.app",
+        "https://volt-core-git-main-voltaris-os.vercel.app",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 voice_provider = MockVoiceProvider()
 
 
@@ -76,6 +87,30 @@ def action_dict(action: ActionRecord) -> dict:
 @app.get("/health")
 def health() -> dict:
     return {"status": "online", "service": "volt-core", "database": "postgresql"}
+
+
+@app.get("/api/v1/dashboard")
+def dashboard() -> dict:
+    with session_scope() as session:
+        systems = session.scalars(select(SystemRecord)).all()
+        events = session.scalars(select(EventRecord).order_by(EventRecord.id.desc()).limit(50)).all()
+        critical = [item for item in events if item.priority in {"P1", "P2"}]
+        return {
+            "core": "online",
+            "mode": "observe",
+            "production_write": False,
+            "systems": [
+                {
+                    "name": item.name,
+                    "environment": item.environment,
+                    "status": item.status,
+                    "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                }
+                for item in systems
+            ],
+            "events": [event_dict(item) for item in events],
+            "critical_count": len(critical),
+        }
 
 
 @app.get("/api/v1/status", dependencies=[Depends(require_scope("status:read"))])
