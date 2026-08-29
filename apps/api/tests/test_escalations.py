@@ -6,6 +6,8 @@ from app.main import app
 def test_event_is_automatically_queued_for_escalation(monkeypatch):
     monkeypatch.setenv("VOLT_BOOTSTRAP_CLIENT", "ci-admin")
     monkeypatch.setenv("VOLT_BOOTSTRAP_KEY", "ci-secret-key")
+    monkeypatch.delenv("VOLT_OPERATOR_PHONE_NUMBER", raising=False)
+    monkeypatch.delenv("DIANE_PHONE_NUMBER", raising=False)
     headers = {"X-Volt-Key": "ci-secret-key"}
 
     with TestClient(app) as client:
@@ -47,6 +49,10 @@ def test_event_is_automatically_queued_for_escalation(monkeypatch):
 def test_p1_p2_p3_are_phone_call_escalations(monkeypatch):
     monkeypatch.setenv("VOLT_BOOTSTRAP_CLIENT", "ci-admin")
     monkeypatch.setenv("VOLT_BOOTSTRAP_KEY", "ci-secret-key")
+    monkeypatch.setenv("VOLT_OPERATOR_PHONE_NUMBER", "+31612345678")
+    monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TWILIO_PHONE_NUMBER", raising=False)
     headers = {"X-Volt-Key": "ci-secret-key"}
 
     with TestClient(app) as client:
@@ -66,10 +72,15 @@ def test_p1_p2_p3_are_phone_call_escalations(monkeypatch):
             assert event["priority"] == expected_priority
             assert event["recommended_action"] == "call"
 
+            response = client.get("/api/escalations?limit=50")
+            escalation = next(item for item in response.json() if item["event_id"] == event["id"])
+            assert escalation["status"] == "dispatched"
+
 
 def test_p4_remains_digest(monkeypatch):
     monkeypatch.setenv("VOLT_BOOTSTRAP_CLIENT", "ci-admin")
     monkeypatch.setenv("VOLT_BOOTSTRAP_KEY", "ci-secret-key")
+    monkeypatch.setenv("VOLT_OPERATOR_PHONE_NUMBER", "+31612345678")
     headers = {"X-Volt-Key": "ci-secret-key"}
 
     with TestClient(app) as client:
@@ -87,3 +98,7 @@ def test_p4_remains_digest(monkeypatch):
         event = response.json()
         assert event["priority"] == "P4"
         assert event["recommended_action"] == "digest"
+
+        response = client.get("/api/escalations?limit=50")
+        escalation = next(item for item in response.json() if item["event_id"] == event["id"])
+        assert escalation["status"] == "queued"
