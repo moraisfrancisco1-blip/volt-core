@@ -7,13 +7,11 @@ from .voice import MockVoiceProvider, build_voice_script
 from .approvals import ApprovalDecision
 from .action_gate import ActionEnvironment, ActionStatus, evaluate_action
 from .db import Base, engine, session_scope
-from .models import SystemRecord, EventRecord, ApprovalRecord, AuditRecord
+from .models import SystemRecord, EventRecord, ApprovalRecord, VoiceCallRecord, ActionRecord, AuditRecord
 from .auth import Principal, authenticate, require_scope
 from .bootstrap import bootstrap_admin
 
-app = FastAPI(title="VOLT CORE", version="0.9.0")
-CALLS = []
-ACTIONS = []
+app = FastAPI(title="VOLT CORE", version="1.0.0")
 voice_provider = MockVoiceProvider()
 
 
@@ -68,6 +66,14 @@ def event_dict(event: EventRecord) -> dict:
     return {"id": event.id, "system": event.system, "level": event.level, "priority": event.priority, "recommended_action": event.recommended_action, "message": event.message, "received_at": event.received_at.isoformat() if event.received_at else None}
 
 
+def call_dict(call: VoiceCallRecord) -> dict:
+    return {"id": call.id, "event_id": call.event_id, "status": call.status, "provider": call.provider, "destination": call.destination, "created_at": call.created_at.isoformat() if call.created_at else None}
+
+
+def action_dict(action: ActionRecord) -> dict:
+    return {"id": action.id, "approval_id": action.approval_id, "system": action.system, "action": action.action, "environment": action.environment, "status": action.status, "reason": action.reason, "executed_at": action.executed_at.isoformat() if action.executed_at else None, "created_at": action.created_at.isoformat() if action.created_at else None}
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "online", "service": "volt-core", "database": "postgresql"}
@@ -76,7 +82,7 @@ def health() -> dict:
 @app.get("/api/v1/status", dependencies=[Depends(require_scope("status:read"))])
 def status() -> dict:
     with session_scope() as session:
-        return {"core": "online", "mode": "observe", "production_write": False, "systems": len(session.scalars(select(SystemRecord)).all()), "events": len(session.scalars(select(EventRecord)).all()), "calls": len(CALLS), "approvals": len(session.scalars(select(ApprovalRecord)).all()), "actions": len(ACTIONS)}
+        return {"core": "online", "mode": "observe", "production_write": False, "systems": len(session.scalars(select(SystemRecord)).all()), "events": len(session.scalars(select(EventRecord)).all()), "calls": len(session.scalars(select(VoiceCallRecord)).all()), "approvals": len(session.scalars(select(ApprovalRecord)).all()), "actions": len(session.scalars(select(ActionRecord)).all())}
 
 
 @app.post("/api/v1/systems", dependencies=[Depends(require_scope("systems:write"))])
@@ -143,16 +149,20 @@ def request_voice_call(request: VoiceCallRequest) -> dict:
         data = event_dict(event)
         if data["priority"] != "P1":
             raise HTTPException(status_code=422, detail="voice calls are reserved for P1 events")
-        result = voice_provider.place_call(request.to, build_voice_script(data))
-        call = {"id": len(CALLS) + 1, "event_id": event.id, "status": result["status"], "provider": result["provider"], "created_at": datetime.now(timezone.utc).isoformat()}
-        CALLS.append(call)
-        session.add(AuditRecord(type="voice_call_requested", reference_id=str(call["id"]), detail=str(event.id)))
-        return call
+        script = build_voice_script(data)
+        result = voice_provider.place_call(request.to, script)
+        call = VoiceCallRecord(event_id=event.id, status=result["status"], provider=result["provider"], destination=request.to, script=script)
+        session.add(call)
+        session.flush()
+        session.add(AuditRecord(type="voice_call_requested", reference_id=str(call.id), detail=str(event.id)))
+        return call_dict(call)
 
 
 @app.get("/api/v1/voice/calls", dependencies=[Depends(require_scope("voice:read"))])
-def list_voice_calls() -> list[dict]:
-    return list(reversed(CALLS))
+def list_voice_calls(limit: int = 100) -> list[dict]:
+    with session_scope() as session:
+        calls = session.scalars(select(VoiceCallRecord).order_by(VoiceCallRecord.id.desc()).limit(min(max(limit, 1), 500))).all()
+        return [call_dict(item) for item in calls]
 
 
 @app.post("/api/v1/approvals", dependencies=[Depends(require_scope("approvals:write"))])
@@ -194,19 +204,23 @@ def request_action(request: ActionRequest) -> dict:
         if approval is None:
             raise HTTPException(status_code=404, detail="approval not found")
         approval_data = {"id": approval.id, "system": approval.system, "action": approval.action, "decision": approval.decision}
-        action = evaluate_action(approval_data, request.environment)
-        action["id"] = len(ACTIONS) + 1
-        if action["status"] == ActionStatus.READY.value:
-            action["status"] = ActionStatus.EXECUTED.value
-            action["executed_at"] = datetime.now(timezone.utc).isoformat()
-        ACTIONS.append(action)
-        session.add(AuditRecord(type="action_evaluated", reference_id=str(action["id"]), detail=action["status"]))
-        return action
+        evaluation = evaluate_action(approval_data, request.environment)
+        status = evaluation["status"]
+        executed_at = datetime.now(timezone.utc) if status == ActionStatus.READY.value else None
+        if status == ActionStatus.READY.value:
+            status = ActionStatus.EXECUTED.value
+        action = ActionRecord(approval_id=approval.id, system=approval.system, action=approval.action, environment=request.environment.value, status=status, reason=evaluation.get("reason"), executed_at=executed_at)
+        session.add(action)
+        session.flush()
+        session.add(AuditRecord(type="action_evaluated", reference_id=str(action.id), detail=action.status))
+        return action_dict(action)
 
 
 @app.get("/api/v1/actions", dependencies=[Depends(require_scope("actions:read"))])
-def list_actions() -> list[dict]:
-    return list(reversed(ACTIONS))
+def list_actions(limit: int = 100) -> list[dict]:
+    with session_scope() as session:
+        actions = session.scalars(select(ActionRecord).order_by(ActionRecord.id.desc()).limit(min(max(limit, 1), 500))).all()
+        return [action_dict(item) for item in actions]
 
 
 @app.get("/api/v1/audit", dependencies=[Depends(require_scope("audit:read"))])
