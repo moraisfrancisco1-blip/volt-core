@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ router = APIRouter(tags=["escalations"])
 
 ACTIVE_STATUSES = {"queued", "acknowledged", "dispatched"}
 VALID_STATUSES = ACTIVE_STATUSES | {"completed", "cancelled"}
+SLA_MINUTES = {"P1": 5, "P2": 15, "P3": 60, "P4": 240}
 
 
 class EscalationUpdate(BaseModel):
@@ -19,13 +20,15 @@ class EscalationUpdate(BaseModel):
 
 
 def escalation_dict(record: EscalationRecord) -> dict:
+    due_at = record.created_at + timedelta(minutes=SLA_MINUTES.get(record.priority, 240)) if record.created_at else None
+    now = datetime.now(timezone.utc)
+    overdue = bool(due_at and record.status in ACTIVE_STATUSES and due_at < now)
     return {
-        "id": record.id,
-        "event_id": record.event_id,
-        "system": record.system,
-        "priority": record.priority,
-        "action": record.action,
-        "status": record.status,
+        "id": record.id, "event_id": record.event_id, "system": record.system,
+        "priority": record.priority, "action": record.action, "status": record.status,
+        "sla_minutes": SLA_MINUTES.get(record.priority, 240),
+        "due_at": due_at.isoformat() if due_at else None,
+        "overdue": overdue,
         "created_at": record.created_at.isoformat() if record.created_at else None,
         "updated_at": record.updated_at.isoformat() if record.updated_at else None,
     }
@@ -35,22 +38,10 @@ def queue_escalation(session, event: EventRecord) -> EscalationRecord:
     existing = session.scalar(select(EscalationRecord).where(EscalationRecord.event_id == event.id))
     if existing is not None:
         return existing
-    record = EscalationRecord(
-        event_id=event.id,
-        system=event.system,
-        priority=event.priority,
-        action=event.recommended_action,
-        status="queued",
-    )
+    record = EscalationRecord(event_id=event.id, system=event.system, priority=event.priority, action=event.recommended_action, status="queued")
     session.add(record)
     session.flush()
-    session.add(
-        AuditRecord(
-            type="escalation_queued",
-            reference_id=str(record.id),
-            detail=f"event={event.id} priority={record.priority} action={record.action}",
-        )
-    )
+    session.add(AuditRecord(type="escalation_queued", reference_id=str(record.id), detail=f"event={event.id} priority={record.priority} action={record.action} sla={SLA_MINUTES.get(record.priority, 240)}m"))
     return record
 
 
@@ -66,10 +57,7 @@ def sync_escalation_status(session, event: EventRecord) -> EscalationRecord | No
 
 
 @router.get("/escalations")
-def list_escalations(
-    limit: int = Query(default=50, ge=1, le=200),
-    status: str | None = None,
-) -> list[dict]:
+def list_escalations(limit: int = Query(default=50, ge=1, le=200), status: str | None = None) -> list[dict]:
     with session_scope() as session:
         statement = select(EscalationRecord)
         if status:
@@ -82,11 +70,7 @@ def list_escalations(
 
 
 @router.patch("/escalations/{escalation_id}", dependencies=[Depends(require_scope("watch:write"))])
-def update_escalation(
-    escalation_id: int,
-    update: EscalationUpdate,
-    principal: Principal = Depends(authenticate),
-) -> dict:
+def update_escalation(escalation_id: int, update: EscalationUpdate, principal: Principal = Depends(authenticate)) -> dict:
     normalized = update.status.strip().lower()
     if normalized not in VALID_STATUSES:
         raise HTTPException(status_code=422, detail="invalid escalation status")
@@ -99,11 +83,5 @@ def update_escalation(
             raise HTTPException(status_code=403, detail="client cannot update escalations in another environment")
         record.status = normalized
         record.updated_at = datetime.now(timezone.utc)
-        session.add(
-            AuditRecord(
-                type="escalation_status_updated",
-                reference_id=str(record.id),
-                detail=f"{normalized} via {principal.name}",
-            )
-        )
+        session.add(AuditRecord(type="escalation_status_updated", reference_id=str(record.id), detail=f"{normalized} via {principal.name}"))
         return escalation_dict(record)
