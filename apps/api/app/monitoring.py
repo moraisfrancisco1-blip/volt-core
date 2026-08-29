@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -72,13 +73,15 @@ def _check(url: str, timeout_seconds: int) -> tuple[bool, str]:
 
 
 def _touch_system(session, target: MonitorTarget, status: str) -> None:
+    now = datetime.now(timezone.utc)
     system = session.scalar(select(SystemRecord).where(SystemRecord.name == target.system_id))
     if system is None:
-        system = SystemRecord(name=target.system_id, environment=target.environment, status=status)
+        system = SystemRecord(name=target.system_id, environment=target.environment, status=status, updated_at=now)
         session.add(system)
     else:
         system.environment = target.environment
         system.status = status
+        system.updated_at = now
 
 
 def _principal(target: MonitorTarget) -> Principal:
