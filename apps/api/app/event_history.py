@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from .auth import Principal, authenticate, require_scope
 from .db import session_scope
-from .escalations import queue_escalation, router as escalation_router, sync_escalation_status
+from .escalations import dispatch_phone_call, queue_escalation, router as escalation_router, sync_escalation_status
 from .models import AuditRecord, EventRecord, SystemRecord
 
 router = APIRouter(prefix="/api", tags=["events"])
@@ -99,7 +99,8 @@ def create_event(session, payload: EventIngestion, principal: Principal) -> Even
     )
     session.add(record)
     session.flush()
-    queue_escalation(session, record)
+    escalation = queue_escalation(session, record)
+    dispatch_phone_call(session, record, escalation)
     session.add(AuditRecord(type="event_received", reference_id=str(record.id), detail=f"{record.system} via {principal.name}"))
     return record
 
