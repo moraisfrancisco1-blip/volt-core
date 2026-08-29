@@ -6,3 +6,4 @@ SQLAlchemy==2.0.43
 psycopg[binary]==3.2.9
 alembic==1.16.5
 pytest==8.4.1
+httpx==0.28.1
