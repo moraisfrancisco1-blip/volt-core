@@ -3,12 +3,14 @@ from enum import Enum
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from .voice import MockVoiceProvider, build_voice_script
+from .approvals import ApprovalDecision, apply_decision, create_approval
 
-app = FastAPI(title="VOLT CORE", version="0.4.0")
-
+app = FastAPI(title="VOLT CORE", version="0.5.0")
 SYSTEMS = {}
 EVENTS = []
 CALLS = []
+APPROVALS = []
+AUDIT_LOG = []
 voice_provider = MockVoiceProvider()
 
 
@@ -39,6 +41,15 @@ class VoiceCallRequest(BaseModel):
     to: str
 
 
+class ApprovalRequest(BaseModel):
+    event_id: int
+    action: str
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: ApprovalDecision
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "online", "service": "volt-core"}
@@ -46,7 +57,7 @@ def health() -> dict:
 
 @app.get("/api/v1/status")
 def status() -> dict:
-    return {"core": "online", "mode": "observe", "production_write": False, "systems": len(SYSTEMS), "events": len(EVENTS), "calls": len(CALLS)}
+    return {"core": "online", "mode": "observe", "production_write": False, "systems": len(SYSTEMS), "events": len(EVENTS), "calls": len(CALLS), "approvals": len(APPROVALS)}
 
 
 @app.post("/api/v1/systems")
@@ -70,6 +81,7 @@ def ingest_event(event: WatchEvent) -> dict:
     priority = LEVEL_PRIORITY[normalized_level]
     record = {"id": len(EVENTS) + 1, "system": event.system, "level": normalized_level, "priority": priority.value, "recommended_action": ACTION_BY_PRIORITY[priority], "message": event.message, "received_at": datetime.now(timezone.utc).isoformat()}
     EVENTS.append(record)
+    AUDIT_LOG.append({"type": "event_received", "event_id": record["id"], "created_at": record["received_at"]})
     return record
 
 
@@ -93,9 +105,41 @@ def request_voice_call(request: VoiceCallRequest) -> dict:
     result = voice_provider.place_call(request.to, build_voice_script(event))
     call = {"id": len(CALLS) + 1, "event_id": event["id"], "status": result["status"], "provider": result["provider"], "created_at": datetime.now(timezone.utc).isoformat()}
     CALLS.append(call)
+    AUDIT_LOG.append({"type": "voice_call_requested", "call_id": call["id"], "created_at": call["created_at"]})
     return call
 
 
 @app.get("/api/v1/voice/calls")
 def list_voice_calls() -> list[dict]:
     return list(reversed(CALLS))
+
+
+@app.post("/api/v1/approvals")
+def request_approval(request: ApprovalRequest) -> dict:
+    event = next((item for item in EVENTS if item["id"] == request.event_id), None)
+    if event is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    approval = create_approval(len(APPROVALS) + 1, event, request.action)
+    APPROVALS.append(approval)
+    AUDIT_LOG.append({"type": "approval_requested", "approval_id": approval["id"], "created_at": approval["created_at"]})
+    return approval
+
+
+@app.post("/api/v1/approvals/{approval_id}/decision")
+def decide_approval(approval_id: int, request: ApprovalDecisionRequest) -> dict:
+    approval = next((item for item in APPROVALS if item["id"] == approval_id), None)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    apply_decision(approval, request.decision)
+    AUDIT_LOG.append({"type": "approval_decision", "approval_id": approval_id, "decision": approval["decision"], "created_at": approval["decided_at"]})
+    return approval
+
+
+@app.get("/api/v1/approvals")
+def list_approvals() -> list[dict]:
+    return list(reversed(APPROVALS))
+
+
+@app.get("/api/v1/audit")
+def audit_log(limit: int = 100) -> list[dict]:
+    return list(reversed(AUDIT_LOG[-limit:]))
