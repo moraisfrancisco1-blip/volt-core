@@ -12,6 +12,7 @@ from .models import SystemRecord, EventRecord, ApprovalRecord, VoiceCallRecord, 
 from .auth import Principal, authenticate, require_scope
 from .bootstrap import bootstrap_admin
 from .event_history import router as event_history_router
+from .monitoring import start_monitoring
 
 app = FastAPI(title="VOLT CORE", version="1.1.0")
 app.add_middleware(
@@ -28,6 +29,7 @@ voice_provider = get_voice_provider()
 @app.on_event("startup")
 def startup() -> None:
     bootstrap_admin()
+    start_monitoring()
 
 
 class Priority(str, Enum):
