@@ -5,7 +5,7 @@ import os
 import threading
 import time
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -36,6 +36,7 @@ class MonitorState:
 
 _state: dict[str, MonitorState] = {}
 _started = False
+_self_test_started = False
 _lock = threading.Lock()
 
 
@@ -49,20 +50,14 @@ def _parse_targets() -> list[MonitorTarget]:
         return []
     if not isinstance(payload, list):
         return []
-    targets: list[MonitorTarget] = []
+    targets = []
     for item in payload:
         if not isinstance(item, dict):
             continue
         system_id = str(item.get("system_id") or "").strip()
         url = str(item.get("url") or "").strip().rstrip("/")
-        if not system_id or not url.startswith(("http://", "https://")):
-            continue
-        targets.append(MonitorTarget(
-            system_id=system_id[:120],
-            system_name=str(item.get("system_name") or system_id)[:160],
-            environment=str(item.get("environment") or "production")[:32],
-            url=url,
-        ))
+        if system_id and url.startswith(("http://", "https://")):
+            targets.append(MonitorTarget(system_id=system_id[:120], system_name=str(item.get("system_name") or system_id)[:160], environment=str(item.get("environment") or "production")[:32], url=url))
     return targets
 
 
@@ -71,29 +66,7 @@ def monitoring_status() -> dict:
     timeout_seconds = max(1, int(os.getenv("VOLT_MONITOR_TIMEOUT_SECONDS", "8")))
     failure_threshold = max(1, int(os.getenv("VOLT_MONITOR_FAILURE_THRESHOLD", "3")))
     interval_seconds = max(15, int(os.getenv("VOLT_MONITOR_INTERVAL_SECONDS", "60")))
-    items = []
-    for target in targets:
-        state = _state.get(target.system_id)
-        items.append({
-            "system_id": target.system_id,
-            "system_name": target.system_name,
-            "environment": target.environment,
-            "url": target.url,
-            "last_checked_at": state.last_checked_at.isoformat() if state and state.last_checked_at else None,
-            "last_success_at": state.last_success_at.isoformat() if state and state.last_success_at else None,
-            "last_detail": state.last_detail if state else None,
-            "last_ok": state.last_ok if state else None,
-            "consecutive_failures": state.consecutive_failures if state else 0,
-            "incident_open": state.incident_open if state else False,
-        })
-    return {
-        "started": _started,
-        "target_count": len(targets),
-        "interval_seconds": interval_seconds,
-        "timeout_seconds": timeout_seconds,
-        "failure_threshold": failure_threshold,
-        "targets": items,
-    }
+    return {"started": _started, "target_count": len(targets), "interval_seconds": interval_seconds, "timeout_seconds": timeout_seconds, "failure_threshold": failure_threshold, "targets": [{"system_id": t.system_id, "system_name": t.system_name, "environment": t.environment, "url": t.url, "last_checked_at": (_state.get(t.system_id).last_checked_at.isoformat() if _state.get(t.system_id) and _state.get(t.system_id).last_checked_at else None), "last_success_at": (_state.get(t.system_id).last_success_at.isoformat() if _state.get(t.system_id) and _state.get(t.system_id).last_success_at else None), "last_detail": (_state.get(t.system_id).last_detail if _state.get(t.system_id) else None), "last_ok": (_state.get(t.system_id).last_ok if _state.get(t.system_id) else None), "consecutive_failures": (_state.get(t.system_id).consecutive_failures if _state.get(t.system_id) else 0), "incident_open": (_state.get(t.system_id).incident_open if _state.get(t.system_id) else False)} for t in targets]}
 
 
 def _check(url: str, timeout_seconds: int) -> tuple[bool, str]:
@@ -110,68 +83,62 @@ def _touch_system(session, target: MonitorTarget, status: str) -> None:
     now = datetime.now(timezone.utc)
     system = session.scalar(select(SystemRecord).where(SystemRecord.name == target.system_id))
     if system is None:
-        system = SystemRecord(name=target.system_id, environment=target.environment, status=status, updated_at=now)
-        session.add(system)
+        session.add(SystemRecord(name=target.system_id, environment=target.environment, status=status, updated_at=now))
     else:
-        system.environment = target.environment
-        system.status = status
-        system.updated_at = now
+        system.environment, system.status, system.updated_at = target.environment, status, now
 
 
 def _principal(target: MonitorTarget) -> Principal:
     return Principal(client_id=0, name="volt-core-monitor", environment=target.environment, scopes={"*"})
 
 
+def _record_check(target: MonitorTarget, ok: bool, detail: str, self_test: bool = False) -> None:
+    threshold = max(1, int(os.getenv("VOLT_MONITOR_FAILURE_THRESHOLD", "3")))
+    now = datetime.now(timezone.utc)
+    state = _state.setdefault(target.system_id, MonitorState())
+    state.last_checked_at, state.last_detail, state.last_ok = now, detail, ok
+    metadata = {"url": target.url}
+    if self_test:
+        metadata["monitor_self_test"] = True
+    if ok:
+        state.last_success_at = now
+        recovered = state.incident_open
+        state.consecutive_failures, state.incident_open = 0, False
+        with session_scope() as session:
+            _touch_system(session, target, "connected")
+            if recovered:
+                create_event(session, EventIngestion(system_id=target.system_id, system_name=target.system_name, environment=target.environment, severity="info", event_type="monitor_recovery", title="System recovered", message=f"Health check recovered: {detail}", source="volt-core-monitor", metadata=metadata), _principal(target))
+        return
+    state.consecutive_failures += 1
+    status = "degraded" if state.consecutive_failures < threshold else "down"
+    with session_scope() as session:
+        _touch_system(session, target, status)
+        if state.consecutive_failures >= threshold and not state.incident_open:
+            state.incident_open = True
+            failure_metadata = {**metadata, "consecutive_failures": state.consecutive_failures}
+            create_event(session, EventIngestion(system_id=target.system_id, system_name=target.system_name, environment=target.environment, severity="high", event_type="monitor_health_failure", title="System health check failed", message=f"{threshold} consecutive health-check failures. Latest result: {detail}", source="volt-core-monitor", metadata=failure_metadata), _principal(target))
+
+
 def monitor_once() -> None:
     timeout_seconds = max(1, int(os.getenv("VOLT_MONITOR_TIMEOUT_SECONDS", "8")))
-    failure_threshold = max(1, int(os.getenv("VOLT_MONITOR_FAILURE_THRESHOLD", "3")))
-
     for target in _parse_targets():
         ok, detail = _check(target.url, timeout_seconds)
-        now = datetime.now(timezone.utc)
-        state = _state.setdefault(target.system_id, MonitorState())
-        state.last_checked_at = now
-        state.last_detail = detail
-        state.last_ok = ok
+        _record_check(target, ok, detail)
 
-        if ok:
-            state.last_success_at = now
-            recovered = state.incident_open
-            state.consecutive_failures = 0
-            state.incident_open = False
-            with session_scope() as session:
-                _touch_system(session, target, "connected")
-                if recovered:
-                    create_event(session, EventIngestion(
-                        system_id=target.system_id,
-                        system_name=target.system_name,
-                        environment=target.environment,
-                        severity="info",
-                        event_type="monitor_recovery",
-                        title="System recovered",
-                        message=f"Health check recovered: {detail}",
-                        source="volt-core-monitor",
-                        metadata={"url": target.url},
-                    ), _principal(target))
-            continue
 
-        state.consecutive_failures += 1
-        status = "degraded" if state.consecutive_failures < failure_threshold else "down"
-        with session_scope() as session:
-            _touch_system(session, target, status)
-            if state.consecutive_failures >= failure_threshold and not state.incident_open:
-                state.incident_open = True
-                create_event(session, EventIngestion(
-                    system_id=target.system_id,
-                    system_name=target.system_name,
-                    environment=target.environment,
-                    severity="high",
-                    event_type="monitor_health_failure",
-                    title="System health check failed",
-                    message=f"{failure_threshold} consecutive health-check failures. Latest result: {detail}",
-                    source="volt-core-monitor",
-                    metadata={"url": target.url, "consecutive_failures": state.consecutive_failures},
-                ), _principal(target))
+def run_controlled_self_test() -> dict:
+    targets = _parse_targets()
+    if not targets:
+        return {"ok": False, "detail": "no monitor target configured"}
+    target = targets[0]
+    threshold = max(1, int(os.getenv("VOLT_MONITOR_FAILURE_THRESHOLD", "3")))
+    for _ in range(threshold):
+        ok, detail = _check("http://127.0.0.1:1/volt-monitor-self-test", 1)
+        _record_check(target, ok, detail, self_test=True)
+    ok, detail = _check(target.url, max(1, int(os.getenv("VOLT_MONITOR_TIMEOUT_SECONDS", "8"))))
+    _record_check(target, ok, detail, self_test=True)
+    state = _state.get(target.system_id)
+    return {"ok": ok and bool(state) and not state.incident_open and state.consecutive_failures == 0, "target": target.system_id, "recovery_detail": detail, "failure_threshold": threshold, "final_status": "connected" if state and state.last_ok else "down"}
 
 
 def _monitor_loop() -> None:
@@ -192,6 +159,13 @@ def start_monitoring() -> None:
         if _started:
             return
         monitor_once()
-        thread = threading.Thread(target=_monitor_loop, name="volt-core-monitor", daemon=True)
-        thread.start()
+        threading.Thread(target=_monitor_loop, name="volt-core-monitor", daemon=True).start()
         _started = True
+
+
+def start_controlled_self_test() -> None:
+    global _self_test_started
+    if _self_test_started or os.getenv("VOLT_RUN_MONITOR_SELF_TEST", "false").lower() != "true":
+        return
+    _self_test_started = True
+    threading.Thread(target=run_controlled_self_test, name="volt-core-monitor-self-test", daemon=True).start()
