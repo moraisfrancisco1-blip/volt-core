@@ -15,13 +15,7 @@ from .voice import build_voice_script, get_voice_provider
 router = APIRouter(prefix="/api", tags=["events"])
 router.include_router(escalation_router)
 
-SEVERITY_PRIORITY = {
-    "critical": "P1",
-    "high": "P2",
-    "medium": "P3",
-    "low": "P4",
-    "info": "P4",
-}
+SEVERITY_PRIORITY = {"critical": "P1", "high": "P2", "medium": "P3", "low": "P4", "info": "P4"}
 ACTION_BY_PRIORITY = {"P1": "call", "P2": "call", "P3": "call", "P4": "digest"}
 VALID_STATUSES = {"active", "acknowledged", "resolved"}
 VOICE_PRIORITIES = {"P1", "P2", "P3"}
@@ -53,33 +47,14 @@ def normalize_severity(value: str) -> str:
 
 
 def event_dict(event: EventRecord) -> dict:
-    return {
-        "id": event.id,
-        "system_id": event.system_id or event.system,
-        "system_name": event.system_name or event.system,
-        "environment": event.environment,
-        "severity": event.severity or event.level.lower(),
-        "priority": event.priority,
-        "event_type": event.event_type,
-        "title": event.title,
-        "message": event.message,
-        "status": event.status,
-        "source": event.source,
-        "metadata": event.metadata_,
-        "recommended_action": event.recommended_action,
-        "created_at": event.created_at.isoformat() if event.created_at else None,
-        "updated_at": event.updated_at.isoformat() if event.updated_at else None,
-        "resolved_at": event.resolved_at.isoformat() if event.resolved_at else None,
-    }
+    return {"id": event.id, "system_id": event.system_id or event.system, "system_name": event.system_name or event.system, "environment": event.environment, "severity": event.severity or event.level.lower(), "priority": event.priority, "event_type": event.event_type, "title": event.title, "message": event.message, "status": event.status, "source": event.source, "metadata": event.metadata_, "recommended_action": event.recommended_action, "created_at": event.created_at.isoformat() if event.created_at else None, "updated_at": event.updated_at.isoformat() if event.updated_at else None, "resolved_at": event.resolved_at.isoformat() if event.resolved_at else None}
 
 
 def should_auto_call(event: EventRecord) -> bool:
-    return (
-        event.priority in VOICE_PRIORITIES
-        and event.environment == "production"
-        and os.getenv("VOLT_AUTO_CALL_ENABLED", "true").lower() == "true"
-        and bool(os.getenv("VOLT_ALERT_PHONE"))
-    )
+    metadata = event.metadata_ or {}
+    if metadata.get("monitor_self_test") is True:
+        return False
+    return event.priority in VOICE_PRIORITIES and event.environment == "production" and os.getenv("VOLT_AUTO_CALL_ENABLED", "true").lower() == "true" and bool(os.getenv("VOLT_ALERT_PHONE"))
 
 
 def dispatch_voice_call(session, event: EventRecord) -> None:
@@ -88,20 +63,9 @@ def dispatch_voice_call(session, event: EventRecord) -> None:
     destination = os.getenv("VOLT_ALERT_PHONE")
     try:
         provider = get_voice_provider()
-        script = build_voice_script({
-            "priority": event.priority,
-            "system": event.system_name or event.system,
-            "message": event.message,
-            "recommended_action": event.recommended_action,
-        })
+        script = build_voice_script({"priority": event.priority, "system": event.system_name or event.system, "message": event.message, "recommended_action": event.recommended_action})
         result = provider.place_call(destination, script)
-        call = VoiceCallRecord(
-            event_id=event.id,
-            status=result.get("status", "queued"),
-            provider=result.get("provider", "unknown"),
-            destination=destination,
-            script=script,
-        )
+        call = VoiceCallRecord(event_id=event.id, status=result.get("status", "queued"), provider=result.get("provider", "unknown"), destination=destination, script=script)
         session.add(call)
         session.add(AuditRecord(type="voice_call_auto_dispatched", reference_id=str(event.id), detail=call.status))
     except Exception as exc:
@@ -120,22 +84,7 @@ def create_event(session, payload: EventIngestion, principal: Principal) -> Even
     else:
         system.environment = payload.environment
         system.status = "connected"
-    record = EventRecord(
-        system=payload.system_id,
-        system_id=payload.system_id,
-        system_name=payload.system_name or payload.system_id,
-        environment=payload.environment,
-        level=severity.upper(),
-        severity=severity,
-        priority=priority,
-        event_type=payload.event_type,
-        title=payload.title or payload.message[:255],
-        recommended_action=ACTION_BY_PRIORITY[priority],
-        message=payload.message,
-        status="active",
-        source=payload.source,
-        metadata_=payload.metadata,
-    )
+    record = EventRecord(system=payload.system_id, system_id=payload.system_id, system_name=payload.system_name or payload.system_id, environment=payload.environment, level=severity.upper(), severity=severity, priority=priority, event_type=payload.event_type, title=payload.title or payload.message[:255], recommended_action=ACTION_BY_PRIORITY[priority], message=payload.message, status="active", source=payload.source, metadata_=payload.metadata)
     session.add(record)
     session.flush()
     queue_escalation(session, record)
@@ -151,12 +100,7 @@ def ingest_event(payload: EventIngestion, principal: Principal = Depends(authent
 
 
 @router.get("/events")
-def list_events(
-    limit: int = Query(default=50, ge=1, le=200),
-    severity: str | None = None,
-    status: str | None = None,
-    system_id: str | None = None,
-) -> list[dict]:
+def list_events(limit: int = Query(default=50, ge=1, le=200), severity: str | None = None, status: str | None = None, system_id: str | None = None) -> list[dict]:
     with session_scope() as session:
         statement = select(EventRecord)
         if severity:
@@ -168,8 +112,7 @@ def list_events(
             statement = statement.where(EventRecord.status == status)
         if system_id:
             statement = statement.where(EventRecord.system_id == system_id)
-        rows = session.scalars(statement.order_by(EventRecord.id.desc()).limit(limit)).all()
-        return [event_dict(row) for row in rows]
+        return [event_dict(row) for row in session.scalars(statement.order_by(EventRecord.id.desc()).limit(limit)).all()]
 
 
 @router.get("/events/{event_id}")
