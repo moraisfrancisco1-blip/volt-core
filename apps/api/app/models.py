@@ -1,5 +1,6 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from typing import Any
+from sqlalchemy import Boolean, DateTime, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -29,11 +30,23 @@ class EventRecord(Base):
     __tablename__ = "events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     system: Mapped[str] = mapped_column(String(120), index=True)
+    system_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
+    system_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    environment: Mapped[str] = mapped_column(String(32), default="production", index=True)
     level: Mapped[str] = mapped_column(String(32))
+    severity: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     priority: Mapped[str] = mapped_column(String(8), index=True)
+    event_type: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     recommended_action: Mapped[str] = mapped_column(String(64))
     message: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    source: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON, nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ApprovalRecord(Base):
