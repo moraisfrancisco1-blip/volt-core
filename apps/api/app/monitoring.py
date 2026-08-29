@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from .auth import Principal
 from .db import session_scope
+from .escalations import process_overdue_escalations
 from .event_history import EventIngestion, create_event
 from .models import SystemRecord
 
@@ -78,6 +79,7 @@ def monitor_once() -> None:
     timeout_seconds = max(1, int(os.getenv("VOLT_MONITOR_TIMEOUT_SECONDS", "8")))
     for target in _parse_targets():
         ok, detail = _check(target.url, timeout_seconds); _record_check(target, ok, detail)
+    with session_scope() as session: process_overdue_escalations(session)
 
 def run_controlled_self_test() -> dict:
     if os.getenv("VOLT_RUN_MONITOR_SELF_TEST", "false").lower() != "true": return {"ok": False, "detail": "self-test disabled"}
