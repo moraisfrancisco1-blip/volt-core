@@ -49,6 +49,18 @@ class EventRecord(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class EscalationRecord(Base):
+    __tablename__ = "escalations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    system: Mapped[str] = mapped_column(String(120), index=True)
+    priority: Mapped[str] = mapped_column(String(8), index=True)
+    action: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class ApprovalRecord(Base):
     __tablename__ = "approvals"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
