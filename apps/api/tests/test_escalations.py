@@ -42,3 +42,48 @@ def test_event_is_automatically_queued_for_escalation(monkeypatch):
         response = client.get("/api/escalations?limit=50")
         escalation = next(item for item in response.json() if item["event_id"] == event_id)
         assert escalation["status"] == "completed"
+
+
+def test_p1_p2_p3_are_phone_call_escalations(monkeypatch):
+    monkeypatch.setenv("VOLT_BOOTSTRAP_CLIENT", "ci-admin")
+    monkeypatch.setenv("VOLT_BOOTSTRAP_KEY", "ci-secret-key")
+    headers = {"X-Volt-Key": "ci-secret-key"}
+
+    with TestClient(app) as client:
+        for severity, expected_priority in (("critical", "P1"), ("high", "P2"), ("medium", "P3")):
+            response = client.post(
+                "/api/events",
+                headers=headers,
+                json={
+                    "system_id": f"phone-{severity}",
+                    "environment": "production",
+                    "severity": severity,
+                    "message": f"{expected_priority} must call the operator",
+                },
+            )
+            assert response.status_code == 200
+            event = response.json()
+            assert event["priority"] == expected_priority
+            assert event["recommended_action"] == "call"
+
+
+def test_p4_remains_digest(monkeypatch):
+    monkeypatch.setenv("VOLT_BOOTSTRAP_CLIENT", "ci-admin")
+    monkeypatch.setenv("VOLT_BOOTSTRAP_KEY", "ci-secret-key")
+    headers = {"X-Volt-Key": "ci-secret-key"}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/events",
+            headers=headers,
+            json={
+                "system_id": "digest-low",
+                "environment": "production",
+                "severity": "low",
+                "message": "P4 should stay in the digest",
+            },
+        )
+        assert response.status_code == 200
+        event = response.json()
+        assert event["priority"] == "P4"
+        assert event["recommended_action"] == "digest"
