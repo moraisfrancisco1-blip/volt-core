@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -7,7 +9,8 @@ from sqlalchemy import select
 from .auth import Principal, authenticate, require_scope
 from .db import session_scope
 from .escalations import queue_escalation, router as escalation_router, sync_escalation_status
-from .models import AuditRecord, EventRecord, SystemRecord
+from .models import AuditRecord, EventRecord, SystemRecord, VoiceCallRecord
+from .voice import build_voice_script, get_voice_provider
 
 router = APIRouter(prefix="/api", tags=["events"])
 router.include_router(escalation_router)
@@ -19,8 +22,9 @@ SEVERITY_PRIORITY = {
     "low": "P4",
     "info": "P4",
 }
-ACTION_BY_PRIORITY = {"P1": "call", "P2": "approval", "P3": "notify", "P4": "digest"}
+ACTION_BY_PRIORITY = {"P1": "call", "P2": "call", "P3": "call", "P4": "digest"}
 VALID_STATUSES = {"active", "acknowledged", "resolved"}
+VOICE_PRIORITIES = {"P1", "P2", "P3"}
 
 
 class EventIngestion(BaseModel):
@@ -69,6 +73,41 @@ def event_dict(event: EventRecord) -> dict:
     }
 
 
+def should_auto_call(event: EventRecord) -> bool:
+    return (
+        event.priority in VOICE_PRIORITIES
+        and event.environment == "production"
+        and os.getenv("VOLT_AUTO_CALL_ENABLED", "true").lower() == "true"
+        and bool(os.getenv("VOLT_ALERT_PHONE"))
+    )
+
+
+def dispatch_voice_call(session, event: EventRecord) -> None:
+    if not should_auto_call(event):
+        return
+    destination = os.getenv("VOLT_ALERT_PHONE")
+    try:
+        provider = get_voice_provider()
+        script = build_voice_script({
+            "priority": event.priority,
+            "system": event.system_name or event.system,
+            "message": event.message,
+            "recommended_action": event.recommended_action,
+        })
+        result = provider.place_call(destination, script)
+        call = VoiceCallRecord(
+            event_id=event.id,
+            status=result.get("status", "queued"),
+            provider=result.get("provider", "unknown"),
+            destination=destination,
+            script=script,
+        )
+        session.add(call)
+        session.add(AuditRecord(type="voice_call_auto_dispatched", reference_id=str(event.id), detail=call.status))
+    except Exception as exc:
+        session.add(AuditRecord(type="voice_call_auto_failed", reference_id=str(event.id), detail=str(exc)[:500]))
+
+
 def create_event(session, payload: EventIngestion, principal: Principal) -> EventRecord:
     if principal.environment != payload.environment and "*" not in principal.scopes:
         raise HTTPException(status_code=403, detail="client cannot write events to another environment")
@@ -100,6 +139,7 @@ def create_event(session, payload: EventIngestion, principal: Principal) -> Even
     session.add(record)
     session.flush()
     queue_escalation(session, record)
+    dispatch_voice_call(session, record)
     session.add(AuditRecord(type="event_received", reference_id=str(record.id), detail=f"{record.system} via {principal.name}"))
     return record
 
