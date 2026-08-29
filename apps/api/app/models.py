@@ -47,6 +47,30 @@ class ApprovalRecord(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class VoiceCallRecord(Base):
+    __tablename__ = "voice_calls"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(Integer, index=True)
+    provider: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    destination: Mapped[str] = mapped_column(String(64))
+    script: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ActionRecord(Base):
+    __tablename__ = "actions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    approval_id: Mapped[int] = mapped_column(Integer, index=True)
+    system: Mapped[str] = mapped_column(String(120), index=True)
+    action: Mapped[str] = mapped_column(String(128))
+    environment: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class AuditRecord(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
