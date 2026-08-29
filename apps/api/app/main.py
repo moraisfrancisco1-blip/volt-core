@@ -11,7 +11,7 @@ from .db import session_scope
 from .models import SystemRecord, EventRecord, ApprovalRecord, VoiceCallRecord, ActionRecord, AuditRecord
 from .auth import Principal, authenticate, require_scope
 from .bootstrap import bootstrap_admin
-from .event_history import router as event_history_router
+from .event_history import router as event_history_router, EventIngestion, create_event, event_dict as detailed_event_dict
 from .monitoring import start_monitoring, monitoring_status, run_controlled_self_test
 
 app = FastAPI(title="VOLT CORE", version="1.1.0")
@@ -19,22 +19,14 @@ app.add_middleware(CORSMiddleware, allow_origins=["https://volt-core.vercel.app"
 app.include_router(event_history_router)
 voice_provider = get_voice_provider()
 
-
 @app.on_event("startup")
 def startup() -> None:
-    bootstrap_admin()
-    start_monitoring()
-    # Temporary one-shot controlled validation of failure -> P2 -> recovery.
-    run_controlled_self_test()
+    bootstrap_admin(); start_monitoring(); run_controlled_self_test()
 
-
-class Priority(str, Enum):
-    P1 = "P1"; P2 = "P2"; P3 = "P3"; P4 = "P4"
-
+class Priority(str, Enum): P1 = "P1"; P2 = "P2"; P3 = "P3"; P4 = "P4"
 LEVEL_PRIORITY = {"CRITICAL": Priority.P1, "ERROR": Priority.P2, "WARNING": Priority.P3, "INFO": Priority.P4}
 ACTION_BY_PRIORITY = {Priority.P1: "call", Priority.P2: "call", Priority.P3: "call", Priority.P4: "digest"}
 VOICE_PRIORITIES = {"P1", "P2", "P3"}
-
 class SystemRegistration(BaseModel): name: str; environment: str = "production"
 class WatchEvent(BaseModel): system: str; level: str; message: str
 class VoiceCallRequest(BaseModel): event_id: int; to: str
@@ -76,11 +68,10 @@ def list_systems() -> list[dict]:
 def ingest_event(event: WatchEvent, principal: Principal = Depends(authenticate)) -> dict:
     normalized_level = event.level.upper()
     if normalized_level not in LEVEL_PRIORITY: raise HTTPException(status_code=422, detail="level must be CRITICAL, ERROR, WARNING or INFO")
+    severity = {"CRITICAL": "critical", "ERROR": "high", "WARNING": "medium", "INFO": "info"}[normalized_level]
     with session_scope() as session:
-        system = session.scalar(select(SystemRecord).where(SystemRecord.name == event.system))
-        if system is None: raise HTTPException(status_code=404, detail="system not registered")
-        if principal.environment != system.environment and "*" not in principal.scopes: raise HTTPException(status_code=403, detail="client cannot write events to another environment")
-        priority = LEVEL_PRIORITY[normalized_level]; record = EventRecord(system=event.system, level=normalized_level, priority=priority.value, recommended_action=ACTION_BY_PRIORITY[priority], message=event.message); session.add(record); session.flush(); session.add(AuditRecord(type="event_received", reference_id=str(record.id), detail=f"{record.system} via {principal.name}")); return event_dict(record)
+        record = create_event(session, EventIngestion(system_id=event.system, system_name=event.system, environment=principal.environment, severity=severity, event_type="legacy_watch", title=event.message[:255], message=event.message, source="legacy-watch"), principal)
+        return event_dict(record)
 @app.get("/api/v1/watch/events", dependencies=[Depends(require_scope("watch:read"))])
 def list_events(limit: int = 50) -> list[dict]:
     with session_scope() as session: return [event_dict(i) for i in session.scalars(select(EventRecord).order_by(EventRecord.id.desc()).limit(min(max(limit,1),200))).all()]
