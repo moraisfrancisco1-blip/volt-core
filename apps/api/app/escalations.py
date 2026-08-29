@@ -8,7 +8,7 @@ from .auth import Principal, authenticate, require_scope
 from .db import session_scope
 from .models import AuditRecord, EscalationRecord, EventRecord
 
-router = APIRouter(prefix="/api", tags=["escalations"])
+router = APIRouter(tags=["escalations"])
 
 ACTIVE_STATUSES = {"queued", "acknowledged", "dispatched"}
 VALID_STATUSES = ACTIVE_STATUSES | {"completed", "cancelled"}
