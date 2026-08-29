@@ -11,18 +11,17 @@ from .db import session_scope
 from .models import SystemRecord, EventRecord, ApprovalRecord, VoiceCallRecord, ActionRecord, AuditRecord
 from .auth import Principal, authenticate, require_scope
 from .bootstrap import bootstrap_admin
+from .event_history import router as event_history_router
 
-app = FastAPI(title="VOLT CORE", version="1.0.0")
+app = FastAPI(title="VOLT CORE", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://volt-core.vercel.app",
-        "https://volt-core-git-main-voltaris-os.vercel.app",
-    ],
+    allow_origins=["https://volt-core.vercel.app", "https://volt-core-git-main-voltaris-os.vercel.app"],
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
+app.include_router(event_history_router)
 voice_provider = MockVoiceProvider()
 
 
@@ -96,20 +95,9 @@ def dashboard() -> dict:
         events = session.scalars(select(EventRecord).order_by(EventRecord.id.desc()).limit(50)).all()
         critical = [item for item in events if item.priority in {"P1", "P2"}]
         return {
-            "core": "online",
-            "mode": "observe",
-            "production_write": False,
-            "systems": [
-                {
-                    "name": item.name,
-                    "environment": item.environment,
-                    "status": item.status,
-                    "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-                }
-                for item in systems
-            ],
-            "events": [event_dict(item) for item in events],
-            "critical_count": len(critical),
+            "core": "online", "mode": "observe", "production_write": False,
+            "systems": [{"name": item.name, "environment": item.environment, "status": item.status, "updated_at": item.updated_at.isoformat() if item.updated_at else None} for item in systems],
+            "events": [event_dict(item) for item in events], "critical_count": len(critical),
         }
 
 

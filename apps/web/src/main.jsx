@@ -6,15 +6,21 @@ const API = (import.meta.env.VITE_API_URL || 'https://api-production-c073.up.rai
 
 function App() {
   const [dashboard, setDashboard] = useState(null);
+  const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     try {
       setError('');
-      const response = await fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`dashboard unavailable (${response.status})`);
-      setDashboard(await response.json());
+      const [dashboardResponse, eventsResponse] = await Promise.all([
+        fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
+        fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
+      ]);
+      if (!dashboardResponse.ok) throw new Error(`dashboard unavailable (${dashboardResponse.status})`);
+      if (!eventsResponse.ok) throw new Error(`event history unavailable (${eventsResponse.status})`);
+      setDashboard(await dashboardResponse.json());
+      setEvents(await eventsResponse.json());
     } catch (err) {
       setError(err?.message || 'dashboard unavailable');
     } finally {
@@ -24,21 +30,17 @@ function App() {
 
   useEffect(() => {
     load();
-    const timer = setInterval(load, 10000);
+    const timer = setInterval(load, 15000);
     return () => clearInterval(timer);
   }, [load]);
 
   const systems = dashboard?.systems || [];
-  const events = dashboard?.events || [];
-  const criticalCount = Number.isFinite(dashboard?.critical_count)
-    ? dashboard.critical_count
-    : events.filter(event => event.priority === 'P1' || event.priority === 'P2').length;
-
+  const activeCritical = events.filter(event => ['P1', 'P2'].includes(event.priority) && event.status !== 'resolved').length;
   const modules = [
     ['CORE', dashboard?.core?.toUpperCase() || (loading ? 'CHECKING' : 'OFFLINE'), 'Orchestrator'],
     ['WATCH', dashboard ? 'ONLINE' : (loading ? 'CHECKING' : 'OFFLINE'), `${events.length} events received`],
     ['CONNECT', dashboard ? 'READY' : (loading ? 'CHECKING' : 'OFFLINE'), `${systems.length} systems connected`],
-    ['VOICE', 'PLANNED', `${criticalCount} escalations waiting`],
+    ['VOICE', 'PLANNED', `${activeCritical} escalations waiting`],
   ];
 
   return (
@@ -56,12 +58,12 @@ function App() {
       </section>
       <section className="priority-card">
         <p className="eyebrow">ESCALATION QUEUE</p>
-        <h2>{criticalCount} critical items</h2>
+        <h2>{activeCritical} critical items</h2>
         <p>P1 = phone call · P2 = approval required · P3 = notification · P4 = digest</p>
       </section>
       <section className="activity-card">
         <p className="eyebrow">LIVE ACTIVITY</p>
-        {loading ? <div className="empty-state">Loading live data...</div> : error && !dashboard ? <div className="empty-state">Unable to load live data. Retrying automatically...</div> : events.length === 0 ? <div className="empty-state">Waiting for the first event.</div> : events.map(event => <div className="event-row" key={event.id}><strong>{event.level || event.priority || 'EVENT'} {event.priority ? `· ${event.priority}` : ''}</strong> · {event.system || 'unknown system'} · {event.message || 'No message'} · {event.recommended_action || 'review'}</div>)}
+        {loading ? <div className="empty-state">Loading live data...</div> : error && !dashboard ? <div className="empty-state">Unable to load live data. Retrying automatically...</div> : events.length === 0 ? <div className="empty-state">Waiting for the first event.</div> : events.map(event => <div className="event-row" key={event.id}><strong>{(event.severity || event.priority || 'EVENT').toUpperCase()} {event.priority ? `· ${event.priority}` : ''}</strong> · {event.system_name || event.system_id || 'unknown system'} · {event.title || event.message} · {event.status || 'active'} · {event.recommended_action || 'review'}</div>)}
       </section>
     </main>
   );
