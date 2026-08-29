@@ -6,10 +6,11 @@ from sqlalchemy import select
 
 from .auth import Principal, authenticate, require_scope
 from .db import session_scope
-from .escalations import queue_escalation
+from .escalations import queue_escalation, router as escalation_router
 from .models import AuditRecord, EventRecord, SystemRecord
 
 router = APIRouter(prefix="/api", tags=["events"])
+router.include_router(escalation_router)
 
 SEVERITY_PRIORITY = {
     "critical": "P1",
