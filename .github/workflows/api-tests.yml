@@ -31,4 +31,6 @@ jobs:
         run: alembic upgrade head
 
       - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/apps/api
         run: pytest -q
