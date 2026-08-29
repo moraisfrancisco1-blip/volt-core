@@ -27,62 +27,34 @@ function App() {
       setEscalations(await escalationsResponse.json());
     } catch (err) {
       setError(err?.message || 'dashboard unavailable');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, 15000);
-    return () => clearInterval(timer);
-  }, [load]);
+  useEffect(() => { load(); const timer = setInterval(load, 15000); return () => clearInterval(timer); }, [load]);
 
   const systems = dashboard?.systems || [];
   const monitorTargets = dashboard?.monitoring?.targets || [];
   const activeEscalations = escalations.filter(item => !['completed', 'cancelled'].includes(item.status));
   const activeCritical = activeEscalations.filter(item => ['P1', 'P2'].includes(item.priority));
   const activeCalls = activeEscalations.filter(item => item.action === 'call');
+  const overdue = activeEscalations.filter(item => item.overdue);
   const modules = [
     ['CORE', dashboard?.core?.toUpperCase() || (loading ? 'CHECKING' : 'OFFLINE'), 'Orchestrator'],
     ['WATCH', dashboard ? 'ONLINE' : (loading ? 'CHECKING' : 'OFFLINE'), `${events.length} events received`],
     ['CONNECT', dashboard ? 'READY' : (loading ? 'CHECKING' : 'OFFLINE'), `${systems.length} systems connected`],
-    ['VOICE', activeCalls.length ? 'READY' : 'STANDBY', activeCalls.length ? `${activeCalls.length} P1 call${activeCalls.length === 1 ? '' : 's'} queued` : `${activeEscalations.length} escalations tracked`],
+    ['VOICE', activeCalls.length ? 'READY' : 'STANDBY', activeCalls.length ? `${activeCalls.length} P1-P3 calls queued` : `${activeEscalations.length} escalations tracked`],
   ];
 
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div><p className="eyebrow">AI OPERATIONS CENTER</p><h1>VOLT CORE</h1></div>
-        <div className="system-status">{dashboard?.core === 'online' ? 'SYSTEM ONLINE' : loading ? 'SYSTEM CHECK' : 'SYSTEM OFFLINE'}</div>
-      </header>
-      <section className="core-card">
-        <div className="core-orb">VOLT</div>
-        <div><p className="eyebrow">CENTRAL INTELLIGENCE</p><h2>Observe. Analyse. Coordinate.</h2><p>Mode: {dashboard?.mode || (loading ? 'starting' : 'unavailable')}. Production writes: {dashboard?.production_write ? 'enabled' : 'disabled'}.</p></div>
-      </section>
-      <section className="module-grid">
-        {modules.map(([name, moduleStatus, description]) => <article className="module-card" key={name}><div className="module-header"><h3>VOLT {name}</h3><span className="status">{moduleStatus}</span></div><p>{description}</p></article>)}
-      </section>
-      <section className="priority-card">
-        <p className="eyebrow">ESCALATION QUEUE</p>
-        <h2>{activeCritical.length} critical items</h2>
-        <p>{activeEscalations.length} active escalations · P1 = phone call · P2 = approval required · P3 = notification · P4 = digest</p>
-      </section>
-      <section className="activity-card">
-        <p className="eyebrow">MONITORING RUNTIME</p>
-        <p>{dashboard?.monitoring?.started ? 'Monitor active' : 'Monitor not started'} · {dashboard?.monitoring?.target_count ?? 0} target(s) · every {dashboard?.monitoring?.interval_seconds ?? '—'} seconds</p>
-        {monitorTargets.length === 0 ? <div className="empty-state">Waiting for a configured monitoring target.</div> : monitorTargets.map(target => <div className="event-row" key={target.system_id}><strong>{target.last_ok === true ? 'ONLINE' : target.last_ok === false ? 'CHECK FAILED' : 'CHECKING'}</strong> · {target.system_name} · last check {target.last_checked_at ? new Date(target.last_checked_at).toLocaleString() : 'pending'} · failures {target.consecutive_failures} · {target.last_detail || 'no result yet'}</div>)}
-      </section>
-      <section className="activity-card">
-        <p className="eyebrow">MONITORED SYSTEMS</p>
-        {systems.length === 0 ? <div className="empty-state">Waiting for the first monitored system.</div> : systems.map(system => <div className="event-row" key={system.name}><strong>{system.status || 'unknown'}</strong> · {system.name} · {system.environment || 'production'} · last signal {system.updated_at ? new Date(system.updated_at).toLocaleString() : 'not available'}</div>)}
-      </section>
-      <section className="activity-card">
-        <p className="eyebrow">LIVE ACTIVITY</p>
-        {loading ? <div className="empty-state">Loading live data...</div> : error && !dashboard ? <div className="empty-state">Unable to load live data. Retrying automatically...</div> : events.length === 0 ? <div className="empty-state">Waiting for the first event.</div> : events.map(event => <div className="event-row" key={event.id}><strong>{(event.severity || event.priority || 'EVENT').toUpperCase()} {event.priority ? `· ${event.priority}` : ''}</strong> · {event.system_name || event.system_id || 'unknown system'} · {event.title || event.message} · {event.status || 'active'} · {event.recommended_action || 'review'}</div>)}
-      </section>
-    </main>
-  );
+  return <main className="app-shell">
+    <header className="topbar"><div><p className="eyebrow">AI OPERATIONS CENTER</p><h1>VOLT CORE</h1></div><div className="system-status">{dashboard?.core === 'online' ? 'SYSTEM ONLINE' : loading ? 'SYSTEM CHECK' : 'SYSTEM OFFLINE'}</div></header>
+    <section className="core-card"><div className="core-orb">VOLT</div><div><p className="eyebrow">CENTRAL INTELLIGENCE</p><h2>Observe. Analyse. Coordinate.</h2><p>Mode: {dashboard?.mode || (loading ? 'starting' : 'unavailable')}. Production writes: {dashboard?.production_write ? 'enabled' : 'disabled'}.</p></div></section>
+    <section className="module-grid">{modules.map(([name, moduleStatus, description]) => <article className="module-card" key={name}><div className="module-header"><h3>VOLT {name}</h3><span className="status">{moduleStatus}</span></div><p>{description}</p></article>)}</section>
+    <section className="priority-card"><p className="eyebrow">ESCALATION QUEUE</p><h2>{activeCritical.length} critical items</h2><p>{activeEscalations.length} active · {overdue.length} overdue · P1/P2/P3 = call · P4 = digest</p></section>
+    <section className="activity-card"><p className="eyebrow">MONITORING RUNTIME</p><p>{dashboard?.monitoring?.started ? 'Monitor active' : 'Monitor not started'} · {dashboard?.monitoring?.target_count ?? 0} target(s) · every {dashboard?.monitoring?.interval_seconds ?? '—'} seconds</p>{monitorTargets.length === 0 ? <div className="empty-state">Waiting for a configured monitoring target.</div> : monitorTargets.map(target => <div className="event-row" key={target.system_id}><strong>{target.last_ok === true ? 'ONLINE' : target.last_ok === false ? 'CHECK FAILED' : 'CHECKING'}</strong> · {target.system_name} · last check {target.last_checked_at ? new Date(target.last_checked_at).toLocaleString() : 'pending'} · failures {target.consecutive_failures} · {target.last_detail || 'no result yet'}</div>)}</section>
+    <section className="activity-card"><p className="eyebrow">DECISION & SLA QUEUE</p>{activeEscalations.length === 0 ? <div className="empty-state">No active escalations.</div> : activeEscalations.map(item => <div className="event-row" key={item.id}><strong>{item.priority}</strong> · {item.system} · {item.action} · {item.status} · SLA {item.sla_minutes ?? '—'} min · due {item.due_at ? new Date(item.due_at).toLocaleString() : '—'} {item.overdue ? '· OVERDUE' : ''}</div>)}</section>
+    <section className="activity-card"><p className="eyebrow">MONITORED SYSTEMS</p>{systems.length === 0 ? <div className="empty-state">Waiting for the first monitored system.</div> : systems.map(system => <div className="event-row" key={system.name}><strong>{system.status || 'unknown'}</strong> · {system.name} · {system.environment || 'production'} · last signal {system.updated_at ? new Date(system.updated_at).toLocaleString() : 'not available'}</div>)}</section>
+    <section className="activity-card"><p className="eyebrow">LIVE ACTIVITY</p>{loading ? <div className="empty-state">Loading live data...</div> : error && !dashboard ? <div className="empty-state">Unable to load live data. Retrying automatically...</div> : events.length === 0 ? <div className="empty-state">Waiting for the first event.</div> : events.map(event => <div className="event-row" key={event.id}><strong>{(event.severity || event.priority || 'EVENT').toUpperCase()} {event.priority ? `· ${event.priority}` : ''}</strong> · {event.system_name || event.system_id || 'unknown system'} · {event.title || event.message} · {event.status || 'active'} · {event.recommended_action || 'review'}</div>)}</section>
+  </main>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
