@@ -8,32 +8,12 @@ from sqlalchemy import select
 
 from .models import EventRecord
 
-BASE_PRIORITY = {
-    "critical": "P1",
-    "high": "P2",
-    "medium": "P3",
-    "low": "P4",
-    "info": "P4",
-}
-
-ACTION_BY_PRIORITY = {
-    "P1": "call",
-    "P2": "call",
-    "P3": "call",
-    "P4": "digest",
-}
-
+BASE_PRIORITY = {"critical": "P1", "high": "P2", "medium": "P3", "low": "P4", "info": "P4"}
+ACTION_BY_PRIORITY = {"P1": "call", "P2": "call", "P3": "call", "P4": "digest"}
 KEYWORD_ESCALATION = {
-    "security": "P1",
-    "data loss": "P1",
-    "payment": "P1",
-    "database": "P1",
-    "unavailable": "P2",
-    "down": "P2",
-    "health check failed": "P2",
-    "timeout": "P2",
+    "security breach": "P1", "security": "P1", "data loss": "P1", "payment": "P1",
+    "database": "P1", "unavailable": "P2", "down": "P2", "health check failed": "P2", "timeout": "P2",
 }
-
 PRIORITY_ORDER = {"P4": 1, "P3": 2, "P2": 3, "P1": 4}
 
 
@@ -52,7 +32,7 @@ def _max_priority(left: str, right: str) -> str:
 def decide_event(session, *, severity: str, system_id: str, environment: str, event_type: str | None, title: str | None, message: str, now: datetime | None = None) -> Decision:
     now = now or datetime.now(timezone.utc)
     priority = BASE_PRIORITY[severity]
-    reason = f"base severity {severity}"
+    reasons = [f"base severity {severity}"]
     text = " ".join(filter(None, [event_type, title, message])).lower()
 
     for keyword, candidate in KEYWORD_ESCALATION.items():
@@ -60,7 +40,7 @@ def decide_event(session, *, severity: str, system_id: str, environment: str, ev
             upgraded = _max_priority(priority, candidate)
             if upgraded != priority:
                 priority = upgraded
-                reason = f"keyword escalation: {keyword}"
+                reasons.append(f"keyword escalation: {keyword}")
 
     window_start = now - timedelta(minutes=10)
     recent = session.scalars(
@@ -78,6 +58,18 @@ def decide_event(session, *, severity: str, system_id: str, environment: str, ev
 
     if len(same) >= 2:
         priority = _max_priority(priority, "P2")
-        reason = f"repeated active incident ({len(same) + 1} occurrences in 10m)"
+        reasons.append(f"repeated active incident ({len(same) + 1} occurrences in 10m)")
 
-    return Decision(priority=priority, action=ACTION_BY_PRIORITY[priority], reason=reason, duplicate=duplicate)
+    # If the same active system has several different incidents, the operational risk rises.
+    distinct_recent = {(item.event_type or "", (item.title or "").strip().lower()) for item in recent}
+    if len(distinct_recent) >= 3:
+        priority = _max_priority(priority, "P2")
+        reasons.append(f"incident burst ({len(distinct_recent)} active incident types in 10m)")
+
+    # A critical event occurring while the system is already degraded is treated as an immediate P1.
+    if severity == "critical":
+        priority = "P1"
+        if "critical incident" not in reasons:
+            reasons.append("critical incident")
+
+    return Decision(priority=priority, action=ACTION_BY_PRIORITY[priority], reason="; ".join(reasons), duplicate=duplicate)
