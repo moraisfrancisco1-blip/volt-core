@@ -57,6 +57,7 @@ class EscalationRecord(Base):
     priority: Mapped[str] = mapped_column(String(8), index=True)
     action: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    call_attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -80,7 +81,9 @@ class VoiceCallRecord(Base):
     status: Mapped[str] = mapped_column(String(32), index=True)
     destination: Mapped[str] = mapped_column(String(64))
     script: Mapped[str | None] = mapped_column(Text, nullable=True)
+    call_sid: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class ActionRecord(Base):

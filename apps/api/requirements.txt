@@ -9,3 +9,4 @@ alembic==1.16.5
 pytest==8.4.1
 httpx==0.28.1
 twilio==9.8.3
+python-multipart==0.0.20

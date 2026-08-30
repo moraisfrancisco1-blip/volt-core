@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from typing import Any
-import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -9,15 +8,13 @@ from sqlalchemy import select
 from .auth import Principal, authenticate, require_scope
 from .db import session_scope
 from .decision_engine import BASE_PRIORITY, decide_event
-from .escalations import queue_escalation, router as escalation_router, sync_escalation_status
-from .models import AuditRecord, EventRecord, SystemRecord, VoiceCallRecord
-from .voice import build_voice_script, get_voice_provider
+from .escalations import dispatch_voice_call, queue_escalation, router as escalation_router, sync_escalation_status
+from .models import AuditRecord, EventRecord, SystemRecord
 
 router = APIRouter(prefix="/api", tags=["events"])
 router.include_router(escalation_router)
 SEVERITY_PRIORITY = BASE_PRIORITY
 VALID_STATUSES = {"active", "acknowledged", "resolved"}
-VOICE_PRIORITIES = {"P1", "P2", "P3"}
 
 class EventIngestion(BaseModel):
     system_id: str = Field(min_length=1, max_length=120)
@@ -44,25 +41,6 @@ def normalize_severity(value: str) -> str:
 def event_dict(event: EventRecord) -> dict:
     return {"id": event.id, "system_id": event.system_id or event.system, "system_name": event.system_name or event.system, "environment": event.environment, "severity": event.severity or event.level.lower(), "priority": event.priority, "event_type": event.event_type, "title": event.title, "message": event.message, "status": event.status, "source": event.source, "metadata": event.metadata_, "recommended_action": event.recommended_action, "created_at": event.created_at.isoformat() if event.created_at else None, "updated_at": event.updated_at.isoformat() if event.updated_at else None, "resolved_at": event.resolved_at.isoformat() if event.resolved_at else None}
 
-def should_auto_call(event: EventRecord) -> bool:
-    metadata = event.metadata_ or {}
-    if metadata.get("monitor_self_test") is True:
-        return False
-    return event.priority in VOICE_PRIORITIES and event.environment == "production" and os.getenv("VOLT_AUTO_CALL_ENABLED", "true").lower() == "true" and bool(os.getenv("VOLT_ALERT_PHONE"))
-
-def dispatch_voice_call(session, event: EventRecord) -> None:
-    if not should_auto_call(event): return
-    destination = os.getenv("VOLT_ALERT_PHONE")
-    try:
-        provider = get_voice_provider()
-        script = build_voice_script({"priority": event.priority, "system": event.system_name or event.system, "message": event.message, "recommended_action": event.recommended_action})
-        result = provider.place_call(destination, script)
-        call = VoiceCallRecord(event_id=event.id, status=result.get("status", "queued"), provider=result.get("provider", "unknown"), destination=destination, script=script)
-        session.add(call)
-        session.add(AuditRecord(type="voice_call_auto_dispatched", reference_id=str(event.id), detail=call.status))
-    except Exception as exc:
-        session.add(AuditRecord(type="voice_call_auto_failed", reference_id=str(event.id), detail=str(exc)[:500]))
-
 def create_event(session, payload: EventIngestion, principal: Principal) -> EventRecord:
     if principal.environment != payload.environment and "*" not in principal.scopes:
         raise HTTPException(status_code=403, detail="client cannot write events to another environment")
@@ -74,7 +52,7 @@ def create_event(session, payload: EventIngestion, principal: Principal) -> Even
     else:
         system.environment = payload.environment; system.status = "connected"
     record = EventRecord(system=payload.system_id, system_id=payload.system_id, system_name=payload.system_name or payload.system_id, environment=payload.environment, level=severity.upper(), severity=severity, priority=decision.priority, event_type=payload.event_type, title=payload.title or payload.message[:255], recommended_action=decision.action, message=payload.message, status="active", source=payload.source, metadata_=payload.metadata)
-    session.add(record); session.flush(); queue_escalation(session, record); dispatch_voice_call(session, record)
+    session.add(record); session.flush(); escalation = queue_escalation(session, record); dispatch_voice_call(session, record, escalation)
     session.add(AuditRecord(type="decision_made", reference_id=str(record.id), detail=f"priority={decision.priority}; action={decision.action}; reason={decision.reason}; duplicate={decision.duplicate}"))
     session.add(AuditRecord(type="event_received", reference_id=str(record.id), detail=f"{record.system} via {principal.name}"))
     return record
