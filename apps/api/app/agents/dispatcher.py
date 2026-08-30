@@ -9,7 +9,7 @@ from ..models import AuditRecord
 from .github_tools import CodeDiagnosisJob
 from .tools import InvestigationJob
 
-_queue: "queue.Queue[InvestigationJob | CodeDiagnosisJob]" = queue.Queue(maxsize=int(os.getenv("VOLT_JARVIS_QUEUE_MAXSIZE", "50")))
+_queue: "queue.Queue[InvestigationJob | CodeDiagnosisJob]" = queue.Queue(maxsize=int(os.getenv("VOLT_AGENT_QUEUE_MAXSIZE", "50")))
 _started = False
 _lock = threading.Lock()
 
@@ -52,7 +52,7 @@ def _worker_loop() -> None:
         try:
             _dispatch(job)
         except Exception as exc:
-            print(f"[jarvis] investigation failure: {type(exc).__name__}: {exc}")
+            print(f"[volt-agent] investigation failure: {type(exc).__name__}: {exc}")
         finally:
             _queue.task_done()
 
@@ -61,7 +61,7 @@ def start_investigation_worker() -> None:
     global _started
     # Mirrors monitoring.py's start_monitoring(): only run the background worker when
     # there's actually something for it to do. Without a key, jobs still enqueue fine
-    # (harmless, bounded by VOLT_JARVIS_QUEUE_MAXSIZE) but nothing ever consumes them --
+    # (harmless, bounded by VOLT_AGENT_QUEUE_MAXSIZE) but nothing ever consumes them --
     # this specifically keeps every existing test that exercises the escalation/voice
     # flow (and therefore calls enqueue_investigation) from spinning up a thread that
     # would try to construct a real Anthropic client in the background.
@@ -70,5 +70,5 @@ def start_investigation_worker() -> None:
     with _lock:
         if _started:
             return
-        threading.Thread(target=_worker_loop, name="volt-core-jarvis", daemon=True).start()
+        threading.Thread(target=_worker_loop, name="volt-core-agent-worker", daemon=True).start()
         _started = True

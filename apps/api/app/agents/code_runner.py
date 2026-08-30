@@ -17,7 +17,7 @@ MAX_TURNS = max(1, int(os.getenv("VOLT_DEVDEBUG_MAX_TURNS", "10")))
 MAX_TOKENS = 2048
 
 SYSTEM_PROMPT = (
-    "You are Jarvis's Dev/Debug agent, VOLT CORE's code-level incident investigation "
+    "You are Volt's Dev/Debug agent, VOLT CORE's code-level incident investigation "
     "agent. You have been triggered because VOLT CORE's Production Monitor already "
     "investigated this incident from its own data and could not explain it as a known, "
     "repeated pattern. Your job is to go deeper by reading the affected system's actual "

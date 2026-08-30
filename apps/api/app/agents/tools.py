@@ -136,7 +136,7 @@ def get_recent_audit_log(job: InvestigationJob, limit: int = 20) -> dict:
         }
 
 
-# The complete, closed set of things Jarvis can read for an investigation. Nothing else
+# The complete, closed set of things Volt can read for an investigation. Nothing else
 # is reachable -- no bash, no filesystem, no network, no write access to any table.
 TOOL_HANDLERS: dict[str, Callable[..., dict]] = {
     "get_incident_event": get_incident_event,

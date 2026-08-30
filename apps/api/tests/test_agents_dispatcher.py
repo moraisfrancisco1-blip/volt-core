@@ -124,7 +124,7 @@ def test_start_investigation_worker_starts_a_thread_when_configured(monkeypatch)
 
     assert dispatcher._started is True
     assert len(started_threads) == 1
-    assert started_threads[0][1] == "volt-core-jarvis"
+    assert started_threads[0][1] == "volt-core-agent-worker"
 
 
 def test_enqueue_code_diagnosis_puts_a_well_formed_job(monkeypatch):
