@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# Node dependencies
+node_modules/
+
 # Distribution / packaging
 .Python
 build/
@@ -39,6 +42,7 @@ cover/
 # Local databases
 *.sqlite3
 *.sqlite
+*.db
 
 # Local environments and secrets
 .env
