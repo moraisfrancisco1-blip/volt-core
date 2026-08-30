@@ -2,7 +2,9 @@ import queue
 
 from sqlalchemy import select
 
-from app.agents import dispatcher
+from app.agents import code_runner, dispatcher, runner
+from app.agents.github_tools import CodeDiagnosisJob
+from app.agents.tools import InvestigationJob
 from app.db import session_scope
 from app.escalations import _retry_or_escalate
 from app.models import AuditRecord, EscalationRecord, EventRecord
@@ -123,3 +125,53 @@ def test_start_investigation_worker_starts_a_thread_when_configured(monkeypatch)
     assert dispatcher._started is True
     assert len(started_threads) == 1
     assert started_threads[0][1] == "volt-core-jarvis"
+
+
+def test_enqueue_code_diagnosis_puts_a_well_formed_job(monkeypatch):
+    fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
+    monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
+
+    dispatcher.enqueue_code_diagnosis(event_id=1, escalation_id=2, system="dispatcher-sys", environment="production", priority="P2", owner="acme", repo="widget", parent_investigation_id=7)
+
+    job = fresh_queue.get_nowait()
+    assert isinstance(job, CodeDiagnosisJob)
+    assert job.owner == "acme"
+    assert job.repo == "widget"
+    assert job.parent_investigation_id == 7
+
+
+def test_enqueue_code_diagnosis_full_queue_writes_audit_record_and_does_not_raise(monkeypatch):
+    full_queue: "queue.Queue" = queue.Queue(maxsize=1)
+    full_queue.put_nowait("occupying-the-only-slot")
+    monkeypatch.setattr(dispatcher, "_queue", full_queue)
+
+    with session_scope() as session:
+        before = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_enqueue_failed", AuditRecord.reference_id == "84")).all())
+
+    dispatcher.enqueue_code_diagnosis(event_id=84, escalation_id=85, system="dispatcher-full-code", environment="production", priority="P2", owner="acme", repo="widget", parent_investigation_id=7)
+
+    with session_scope() as session:
+        after = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_enqueue_failed", AuditRecord.reference_id == "84")).all())
+    assert after == before + 1
+
+
+def test_dispatch_routes_investigation_job_to_runner(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner, "run_investigation", lambda job: calls.append(("runner", job)))
+    monkeypatch.setattr(code_runner, "run_code_diagnosis", lambda job: calls.append(("code_runner", job)))
+
+    job = InvestigationJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1")
+    dispatcher._dispatch(job)
+
+    assert calls == [("runner", job)]
+
+
+def test_dispatch_routes_code_diagnosis_job_to_code_runner(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner, "run_investigation", lambda job: calls.append(("runner", job)))
+    monkeypatch.setattr(code_runner, "run_code_diagnosis", lambda job: calls.append(("code_runner", job)))
+
+    job = CodeDiagnosisJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1", owner="acme", repo="widget", parent_investigation_id=1)
+    dispatcher._dispatch(job)
+
+    assert calls == [("code_runner", job)]

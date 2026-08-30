@@ -1,11 +1,13 @@
+import queue
 from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from app.agents import runner
+from app.agents import dispatcher, repo_config, runner
+from app.agents.github_tools import CodeDiagnosisJob
 from app.agents.tools import InvestigationJob
 from app.db import session_scope
-from app.models import AgentInvestigationRecord, EventRecord
+from app.models import AgentInvestigationRecord, AuditRecord, EventRecord
 
 
 class FakeToolUseBlock:
@@ -131,3 +133,69 @@ def test_run_investigation_exceeds_max_turns_is_recorded_as_failed(monkeypatch):
     record = _latest_investigation(event_id)
     assert record.status == "failed"
     assert "exceeded 2 turns" in record.error
+
+
+def _submit_response(is_known_pattern: bool):
+    return _fake_message(
+        [FakeToolUseBlock("submit_investigation_result", {
+            "hypothesis": "probe hypothesis", "recommended_next_step": "probe next step",
+            "confidence": 0.5, "is_known_pattern": is_known_pattern,
+        })],
+        "tool_use",
+    )
+
+
+def test_unknown_pattern_investigation_chains_to_code_diagnosis(monkeypatch):
+    fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
+    monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
+    monkeypatch.setattr(repo_config, "resolve_repo", lambda system: ("acme", "widget"))
+    event_id = _seed_event("runner-chain-unknown-system")
+    job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-chain-unknown-system", environment="production", priority="P2")
+
+    monkeypatch.setattr(runner, "_call_model", lambda client, messages: _submit_response(is_known_pattern=False))
+
+    runner.run_investigation(job)
+
+    parent = _latest_investigation(event_id)
+    assert parent.investigation_type == "voice_call_failure"
+    assert fresh_queue.qsize() == 1
+    chained_job = fresh_queue.get_nowait()
+    assert isinstance(chained_job, CodeDiagnosisJob)
+    assert chained_job.event_id == event_id
+    assert chained_job.owner == "acme"
+    assert chained_job.repo == "widget"
+    assert chained_job.parent_investigation_id == parent.id
+
+
+def test_known_pattern_investigation_does_not_chain(monkeypatch):
+    fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
+    monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
+    monkeypatch.setattr(repo_config, "resolve_repo", lambda system: ("acme", "widget"))
+    event_id = _seed_event("runner-chain-known-system")
+    job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-chain-known-system", environment="production", priority="P2")
+
+    monkeypatch.setattr(runner, "_call_model", lambda client, messages: _submit_response(is_known_pattern=True))
+
+    runner.run_investigation(job)
+
+    assert fresh_queue.empty()
+
+
+def test_unknown_pattern_without_repo_mapping_skips_chain_and_audits(monkeypatch):
+    fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
+    monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
+    monkeypatch.setattr(repo_config, "resolve_repo", lambda system: None)
+    event_id = _seed_event("runner-chain-no-mapping-system")
+    job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-chain-no-mapping-system", environment="production", priority="P2")
+
+    with session_scope() as session:
+        before = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_chain_skipped_no_repo_mapping", AuditRecord.reference_id == str(event_id))).all())
+
+    monkeypatch.setattr(runner, "_call_model", lambda client, messages: _submit_response(is_known_pattern=False))
+
+    runner.run_investigation(job)
+
+    assert fresh_queue.empty()
+    with session_scope() as session:
+        after = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_chain_skipped_no_repo_mapping", AuditRecord.reference_id == str(event_id))).all())
+    assert after == before + 1

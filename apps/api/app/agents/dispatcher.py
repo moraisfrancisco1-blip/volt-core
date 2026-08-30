@@ -6,9 +6,10 @@ import threading
 
 from ..db import session_scope
 from ..models import AuditRecord
+from .github_tools import CodeDiagnosisJob
 from .tools import InvestigationJob
 
-_queue: "queue.Queue[InvestigationJob]" = queue.Queue(maxsize=int(os.getenv("VOLT_JARVIS_QUEUE_MAXSIZE", "50")))
+_queue: "queue.Queue[InvestigationJob | CodeDiagnosisJob]" = queue.Queue(maxsize=int(os.getenv("VOLT_JARVIS_QUEUE_MAXSIZE", "50")))
 _started = False
 _lock = threading.Lock()
 
@@ -24,13 +25,32 @@ def enqueue_investigation(*, event_id: int, escalation_id: int, system: str, env
             session.add(AuditRecord(type="investigation_enqueue_failed", reference_id=str(event_id), detail=str(exc)[:500]))
 
 
-def _worker_loop() -> None:
-    from . import runner  # imported lazily so importing this module never constructs an Anthropic client
+def enqueue_code_diagnosis(*, event_id: int, escalation_id: int, system: str, environment: str, priority: str, owner: str, repo: str, parent_investigation_id: int) -> None:
+    job = CodeDiagnosisJob(
+        event_id=event_id, escalation_id=escalation_id, system=system, environment=environment,
+        priority=priority, owner=owner, repo=repo, parent_investigation_id=parent_investigation_id,
+    )
+    try:
+        _queue.put_nowait(job)
+    except Exception as exc:
+        with session_scope() as session:
+            session.add(AuditRecord(type="investigation_enqueue_failed", reference_id=str(event_id), detail=str(exc)[:500]))
 
+
+def _dispatch(job: InvestigationJob | CodeDiagnosisJob) -> None:
+    if isinstance(job, CodeDiagnosisJob):
+        from . import code_runner
+        code_runner.run_code_diagnosis(job)
+    else:
+        from . import runner
+        runner.run_investigation(job)
+
+
+def _worker_loop() -> None:
     while True:
         job = _queue.get()
         try:
-            runner.run_investigation(job)
+            _dispatch(job)
         except Exception as exc:
             print(f"[jarvis] investigation failure: {type(exc).__name__}: {exc}")
         finally:

@@ -19,13 +19,13 @@ def _seed_event(system_id: str) -> int:
         return event.id
 
 
-def _seed_investigation(event_id: int, *, status: str, hypothesis: str | None = "A hypothesis") -> int:
+def _seed_investigation(event_id: int, *, status: str, hypothesis: str | None = "A hypothesis", **overrides) -> int:
     with session_scope() as session:
         record = AgentInvestigationRecord(
             event_id=event_id, escalation_id=event_id, system="investigations-api-system", environment="production",
             priority="P2", status=status, hypothesis=hypothesis, recommended_next_step="Do something",
             confidence=0.5, is_known_pattern=False, model="claude-sonnet-4-5",
-            completed_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc), **overrides,
         )
         session.add(record)
         session.flush()
@@ -78,3 +78,23 @@ def test_get_investigation_missing_returns_404():
     with TestClient(app) as client:
         response = client.get("/api/investigations/999999")
         assert response.status_code == 404
+
+
+def test_list_investigations_filters_by_parent_investigation_id():
+    parent_event_id = _seed_event("investigations-api-parent-system")
+    parent_id = _seed_investigation(parent_event_id, status="completed", investigation_type="voice_call_failure")
+    child_event_id = _seed_event("investigations-api-child-system")
+    child_id = _seed_investigation(
+        child_event_id, status="completed", investigation_type="code_diagnosis",
+        parent_investigation_id=parent_id, repo_owner="acme", repo_name="widget",
+    )
+    _seed_investigation(child_event_id, status="completed", investigation_type="code_diagnosis")  # unrelated, no parent
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/investigations?parent_investigation_id={parent_id}")
+        assert response.status_code == 200
+        rows = response.json()
+        assert {item["id"] for item in rows} == {child_id}
+        assert rows[0]["repo_owner"] == "acme"
+        assert rows[0]["repo_name"] == "widget"
+        assert rows[0]["parent_investigation_id"] == parent_id
