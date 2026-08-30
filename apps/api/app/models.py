@@ -125,6 +125,24 @@ class AgentInvestigationRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class MonitoringSweepRecord(Base):
+    __tablename__ = "monitoring_sweeps"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    system: Mapped[str] = mapped_column(String(120), index=True)
+    environment: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="completed", index=True)
+    event_action: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    turns_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AuditRecord(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

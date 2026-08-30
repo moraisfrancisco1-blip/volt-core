@@ -253,7 +253,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "get_prior_investigation",
-        "description": "Read the Production Monitor's earlier diagnosis of this same incident (hypothesis, recommended next step, confidence) -- start here so you're not investigating from scratch.",
+        "description": "Read Volt's earlier diagnosis of this same incident (hypothesis, recommended next step, confidence) -- start here so you're not investigating from scratch.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
 ]
