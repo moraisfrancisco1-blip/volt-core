@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app import escalations as escalations_module
 from app.db import session_scope
 from app.escalations import MAX_CALL_ATTEMPTS, process_overdue_escalations
 from app.main import app
@@ -299,3 +300,36 @@ def test_voice_status_callback_accepts_valid_twilio_signature(monkeypatch):
     assert response.status_code == 200
     # Signature passes, but no VoiceCallRecord has this fabricated sid.
     assert response.json() == {"received": True, "matched": False}
+
+
+def test_failed_call_enqueues_exactly_one_investigation(monkeypatch):
+    headers = _bootstrap(monkeypatch)
+    _enable_mock_calling(monkeypatch)
+    enqueued = []
+    monkeypatch.setattr(escalations_module, "enqueue_investigation", lambda **kwargs: enqueued.append(kwargs))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/events",
+            headers=headers,
+            json={
+                "system_id": "jarvis-trigger-system",
+                "environment": "production",
+                "severity": "critical",
+                "message": "First failed call should hand off to Jarvis exactly once",
+            },
+        )
+        event_id = response.json()["id"]
+        first_sid = _latest_call_sid(event_id)
+
+        # First failure: investigate.
+        response = client.post("/api/voice/status", data={"CallSid": first_sid, "CallStatus": "no-answer"})
+        assert response.status_code == 200
+        assert len(enqueued) == 1
+        assert enqueued[0]["event_id"] == event_id
+
+        # Retry at the same priority failing again: no second investigation.
+        second_sid = _latest_call_sid(event_id)
+        response = client.post("/api/voice/status", data={"CallSid": second_sid, "CallStatus": "no-answer"})
+        assert response.status_code == 200
+        assert len(enqueued) == 1
