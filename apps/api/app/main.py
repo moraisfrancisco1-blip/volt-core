@@ -7,6 +7,8 @@ from sqlalchemy import select
 from .voice import get_voice_provider, build_voice_script
 from .approvals import ApprovalDecision
 from .action_gate import ActionEnvironment, ActionStatus, evaluate_action
+from .agents.dispatcher import start_investigation_worker
+from .agents.router import router as investigations_router
 from .db import session_scope
 from .models import SystemRecord, EventRecord, ApprovalRecord, VoiceCallRecord, ActionRecord, AuditRecord
 from .auth import Principal, authenticate, require_scope
@@ -17,11 +19,12 @@ from .monitoring import start_monitoring, monitoring_status, run_controlled_self
 app = FastAPI(title="VOLT CORE", version="1.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["https://volt-core.vercel.app", "https://volt-core-git-main-voltaris-os.vercel.app"], allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "OPTIONS"], allow_headers=["*"])
 app.include_router(event_history_router)
+app.include_router(investigations_router)
 voice_provider = get_voice_provider()
 
 @app.on_event("startup")
 def startup() -> None:
-    bootstrap_admin(); start_monitoring(); run_controlled_self_test()
+    bootstrap_admin(); start_monitoring(); run_controlled_self_test(); start_investigation_worker()
 
 class Priority(str, Enum): P1 = "P1"; P2 = "P2"; P3 = "P3"; P4 = "P4"
 LEVEL_PRIORITY = {"CRITICAL": Priority.P1, "ERROR": Priority.P2, "WARNING": Priority.P3, "INFO": Priority.P4}
