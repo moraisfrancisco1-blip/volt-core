@@ -313,10 +313,10 @@ def test_failed_call_enqueues_exactly_one_investigation(monkeypatch):
             "/api/events",
             headers=headers,
             json={
-                "system_id": "jarvis-trigger-system",
+                "system_id": "volt-trigger-system",
                 "environment": "production",
                 "severity": "critical",
-                "message": "First failed call should hand off to Jarvis exactly once",
+                "message": "First failed call should hand off to Volt exactly once",
             },
         )
         event_id = response.json()["id"]

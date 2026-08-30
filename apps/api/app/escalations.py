@@ -77,7 +77,7 @@ def _retry_or_escalate(session, event: EventRecord, escalation: EscalationRecord
     # ends up "queued" -> dispatch_voice_call, never a silent success.
     now = datetime.now(timezone.utc)
     # First confirmed failure at this priority (not a subsequent retry, not a P4 digest
-    # that never called anyone): hand it to Jarvis for a read-only investigation. This
+    # that never called anyone): hand it to Volt for a read-only investigation. This
     # never touches escalation/event state and can never fail this function.
     if escalation.action == "call" and escalation.call_attempts == 1:
         enqueue_investigation(event_id=event.id, escalation_id=escalation.id, system=event.system, environment=event.environment, priority=escalation.priority)

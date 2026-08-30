@@ -11,12 +11,12 @@ from ..db import session_scope
 from ..models import AgentInvestigationRecord, AuditRecord
 from .tools import SUBMIT_TOOL_NAME, SUBMIT_TOOL_SCHEMA, TOOL_HANDLERS, TOOL_SCHEMAS, InvestigationJob
 
-MODEL = os.getenv("VOLT_JARVIS_MODEL", "claude-sonnet-4-5")
-MAX_TURNS = max(1, int(os.getenv("VOLT_JARVIS_MAX_TURNS", "6")))
+MODEL = os.getenv("VOLT_MONITOR_MODEL", "claude-sonnet-4-5")
+MAX_TURNS = max(1, int(os.getenv("VOLT_MONITOR_MAX_TURNS", "6")))
 MAX_TOKENS = 2048
 
 SYSTEM_PROMPT = (
-    "You are Jarvis, VOLT CORE's incident investigation agent. You have been triggered "
+    "You are Volt, VOLT CORE's incident investigation agent. You have been triggered "
     "because a P1/P2/P3 alert phone call to a human operator failed to be confirmed "
     "(no answer, busy, failed, or the call was never confirmed before its SLA window "
     "passed). Your job is only to investigate and explain -- you have read-only tools "
