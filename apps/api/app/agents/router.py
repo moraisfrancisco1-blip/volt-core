@@ -15,6 +15,7 @@ def investigation_dict(record: AgentInvestigationRecord) -> dict:
         "event_id": record.event_id,
         "escalation_id": record.escalation_id,
         "investigation_type": record.investigation_type,
+        "parent_investigation_id": record.parent_investigation_id,
         "system": record.system,
         "environment": record.environment,
         "priority": record.priority,
@@ -23,6 +24,8 @@ def investigation_dict(record: AgentInvestigationRecord) -> dict:
         "recommended_next_step": record.recommended_next_step,
         "confidence": record.confidence,
         "is_known_pattern": record.is_known_pattern,
+        "repo_owner": record.repo_owner,
+        "repo_name": record.repo_name,
         "model": record.model,
         "turns_used": record.turns_used,
         "input_tokens": record.input_tokens,
@@ -35,12 +38,15 @@ def investigation_dict(record: AgentInvestigationRecord) -> dict:
 
 @router.get("/investigations")
 def list_investigations(
-    limit: int = Query(default=50, ge=1, le=200), event_id: int | None = None, status: str | None = None
+    limit: int = Query(default=50, ge=1, le=200), event_id: int | None = None, status: str | None = None,
+    parent_investigation_id: int | None = None,
 ) -> list[dict]:
     with session_scope() as session:
         statement = select(AgentInvestigationRecord)
         if event_id is not None:
             statement = statement.where(AgentInvestigationRecord.event_id == event_id)
+        if parent_investigation_id is not None:
+            statement = statement.where(AgentInvestigationRecord.parent_investigation_id == parent_investigation_id)
         if status:
             normalized = status.strip().lower()
             if normalized not in VALID_STATUSES:

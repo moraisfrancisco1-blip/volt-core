@@ -96,26 +96,27 @@ def _safe_float(value: Any) -> float | None:
 
 def _persist_success(job: InvestigationJob, submitted: dict[str, Any], response: Any, turns_used: int) -> None:
     usage = getattr(response, "usage", None)
+    is_known_pattern = bool(submitted["is_known_pattern"]) if submitted.get("is_known_pattern") is not None else None
     with session_scope() as session:
-        session.add(
-            AgentInvestigationRecord(
-                event_id=job.event_id,
-                escalation_id=job.escalation_id,
-                system=job.system,
-                environment=job.environment,
-                priority=job.priority,
-                status="completed",
-                hypothesis=str(submitted.get("hypothesis") or ""),
-                recommended_next_step=str(submitted.get("recommended_next_step") or ""),
-                confidence=_safe_float(submitted.get("confidence")),
-                is_known_pattern=bool(submitted["is_known_pattern"]) if submitted.get("is_known_pattern") is not None else None,
-                model=MODEL,
-                turns_used=turns_used,
-                input_tokens=getattr(usage, "input_tokens", None),
-                output_tokens=getattr(usage, "output_tokens", None),
-                completed_at=datetime.now(timezone.utc),
-            )
+        record = AgentInvestigationRecord(
+            event_id=job.event_id,
+            escalation_id=job.escalation_id,
+            system=job.system,
+            environment=job.environment,
+            priority=job.priority,
+            status="completed",
+            hypothesis=str(submitted.get("hypothesis") or ""),
+            recommended_next_step=str(submitted.get("recommended_next_step") or ""),
+            confidence=_safe_float(submitted.get("confidence")),
+            is_known_pattern=is_known_pattern,
+            model=MODEL,
+            turns_used=turns_used,
+            input_tokens=getattr(usage, "input_tokens", None),
+            output_tokens=getattr(usage, "output_tokens", None),
+            completed_at=datetime.now(timezone.utc),
         )
+        session.add(record)
+        session.flush()  # session_scope uses autoflush=False -- need record.id before the block exits
         session.add(
             AuditRecord(
                 type="investigation_completed",
@@ -123,6 +124,45 @@ def _persist_success(job: InvestigationJob, submitted: dict[str, Any], response:
                 detail=f"escalation={job.escalation_id} turns={turns_used}",
             )
         )
+        investigation_id = record.id
+
+    if is_known_pattern is False:
+        _maybe_chain_to_code_diagnosis(job, parent_investigation_id=investigation_id)
+
+
+def _maybe_chain_to_code_diagnosis(job: InvestigationJob, *, parent_investigation_id: int) -> None:
+    # Chaining logic lives ONLY here. code_runner.py's run_code_diagnosis has no
+    # equivalent call -- there is no structural path from a completed code_diagnosis
+    # investigation back into this function. Do not "fix" that by adding chaining there.
+    try:
+        from .dispatcher import enqueue_code_diagnosis
+        from .repo_config import resolve_repo
+
+        mapping = resolve_repo(job.system)
+        if mapping is None:
+            with session_scope() as session:
+                session.add(
+                    AuditRecord(
+                        type="investigation_chain_skipped_no_repo_mapping",
+                        reference_id=str(job.event_id),
+                        detail=f"system={job.system} has no VOLT_SYSTEM_REPOS mapping",
+                    )
+                )
+            return
+        owner, repo = mapping
+        enqueue_code_diagnosis(
+            event_id=job.event_id,
+            escalation_id=job.escalation_id,
+            system=job.system,
+            environment=job.environment,
+            priority=job.priority,
+            owner=owner,
+            repo=repo,
+            parent_investigation_id=parent_investigation_id,
+        )
+    except Exception as exc:
+        with session_scope() as session:
+            session.add(AuditRecord(type="investigation_chain_failed", reference_id=str(job.event_id), detail=str(exc)[:500]))
 
 
 def _persist_failure(job: InvestigationJob, reason: str) -> None:
