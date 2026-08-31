@@ -128,6 +128,7 @@ def _persist_success(job: InvestigationJob, submitted: dict[str, Any], response:
 
     if is_known_pattern is False:
         _maybe_chain_to_code_diagnosis(job, parent_investigation_id=investigation_id)
+        _maybe_chain_to_database_diagnosis(job, parent_investigation_id=investigation_id)
 
 
 def _maybe_chain_to_code_diagnosis(job: InvestigationJob, *, parent_investigation_id: int) -> None:
@@ -158,6 +159,25 @@ def _maybe_chain_to_code_diagnosis(job: InvestigationJob, *, parent_investigatio
             priority=job.priority,
             owner=owner,
             repo=repo,
+            parent_investigation_id=parent_investigation_id,
+        )
+    except Exception as exc:
+        with session_scope() as session:
+            session.add(AuditRecord(type="investigation_chain_failed", reference_id=str(job.event_id), detail=str(exc)[:500]))
+
+
+def _maybe_chain_to_database_diagnosis(job: InvestigationJob, *, parent_investigation_id: int) -> None:
+    # Unlike Dev/Debug, there's no mapping to resolve -- the target is always VOLT
+    # CORE's own Postgres. Fires unconditionally, no skip condition.
+    try:
+        from .dispatcher import enqueue_database_diagnosis
+
+        enqueue_database_diagnosis(
+            event_id=job.event_id,
+            escalation_id=job.escalation_id,
+            system=job.system,
+            environment=job.environment,
+            priority=job.priority,
             parent_investigation_id=parent_investigation_id,
         )
     except Exception as exc:

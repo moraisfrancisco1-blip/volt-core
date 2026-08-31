@@ -1,8 +1,10 @@
 import queue
 
+import pytest
 from sqlalchemy import select
 
-from app.agents import code_runner, dispatcher, runner
+from app.agents import code_runner, database_runner, dispatcher, runner
+from app.agents.database_tools import DatabaseJob
 from app.agents.github_tools import CodeDiagnosisJob
 from app.agents.tools import InvestigationJob
 from app.db import session_scope
@@ -175,3 +177,47 @@ def test_dispatch_routes_code_diagnosis_job_to_code_runner(monkeypatch):
     dispatcher._dispatch(job)
 
     assert calls == [("code_runner", job)]
+
+
+def test_enqueue_database_diagnosis_puts_a_well_formed_job(monkeypatch):
+    fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
+    monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
+
+    dispatcher.enqueue_database_diagnosis(event_id=1, escalation_id=2, system="dispatcher-sys", environment="production", priority="P2", parent_investigation_id=7)
+
+    job = fresh_queue.get_nowait()
+    assert isinstance(job, DatabaseJob)
+    assert job.event_id == 1
+    assert job.parent_investigation_id == 7
+
+
+def test_enqueue_database_diagnosis_full_queue_writes_audit_record_and_does_not_raise(monkeypatch):
+    full_queue: "queue.Queue" = queue.Queue(maxsize=1)
+    full_queue.put_nowait("occupying-the-only-slot")
+    monkeypatch.setattr(dispatcher, "_queue", full_queue)
+
+    with session_scope() as session:
+        before = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_enqueue_failed", AuditRecord.reference_id == "99")).all())
+
+    dispatcher.enqueue_database_diagnosis(event_id=99, escalation_id=100, system="dispatcher-full-db", environment="production", priority="P2", parent_investigation_id=7)
+
+    with session_scope() as session:
+        after = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_enqueue_failed", AuditRecord.reference_id == "99")).all())
+    assert after == before + 1
+
+
+def test_dispatch_routes_database_job_to_database_runner(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner, "run_investigation", lambda job: calls.append(("runner", job)))
+    monkeypatch.setattr(code_runner, "run_code_diagnosis", lambda job: calls.append(("code_runner", job)))
+    monkeypatch.setattr(database_runner, "run_database_diagnosis", lambda job: calls.append(("database_runner", job)))
+
+    job = DatabaseJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1", parent_investigation_id=1)
+    dispatcher._dispatch(job)
+
+    assert calls == [("database_runner", job)]
+
+
+def test_dispatch_raises_type_error_for_unrecognized_job_type():
+    with pytest.raises(TypeError):
+        dispatcher._dispatch("not-a-real-job")
