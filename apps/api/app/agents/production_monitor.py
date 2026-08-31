@@ -48,6 +48,7 @@ SYSTEM_PROMPT = (
 
 _started = False
 _lock = threading.Lock()
+_sweep_in_progress = False
 
 
 def _build_prompt(job: ProductionSweepJob) -> str:
@@ -177,12 +178,23 @@ def run_sweep() -> None:
                 session.add(AuditRecord(type="monitoring_sweep_failed", reference_id=system, detail=str(exc)[:500]))
 
 
+def is_sweep_in_progress() -> bool:
+    # The dashboard's signal that a sweep is actively running right now -- sweep
+    # records are only written once a sweep completes (success or failure), so this
+    # is the only way to distinguish "idle between sweeps" from "sweeping now".
+    return _sweep_in_progress
+
+
 def _sweep_loop() -> None:
+    global _sweep_in_progress
     while True:
         try:
+            _sweep_in_progress = True
             run_sweep()
         except Exception as exc:
             print(f"[volt-core-prodmon] sweep failure: {type(exc).__name__}: {exc}")
+        finally:
+            _sweep_in_progress = False
         time.sleep(SWEEP_INTERVAL_SECONDS)
 
 
