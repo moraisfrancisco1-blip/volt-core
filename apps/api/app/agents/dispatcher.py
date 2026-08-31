@@ -8,9 +8,10 @@ from ..db import session_scope
 from ..models import AuditRecord
 from .database_tools import DatabaseJob
 from .github_tools import CodeDiagnosisJob
+from .stripe_tools import FinanceJob
 from .tools import InvestigationJob
 
-_queue: "queue.Queue[InvestigationJob | CodeDiagnosisJob | DatabaseJob]" = queue.Queue(maxsize=int(os.getenv("VOLT_AGENT_QUEUE_MAXSIZE", "50")))
+_queue: "queue.Queue[InvestigationJob | CodeDiagnosisJob | DatabaseJob | FinanceJob]" = queue.Queue(maxsize=int(os.getenv("VOLT_AGENT_QUEUE_MAXSIZE", "50")))
 _started = False
 _lock = threading.Lock()
 
@@ -50,13 +51,28 @@ def enqueue_database_diagnosis(*, event_id: int, escalation_id: int, system: str
             session.add(AuditRecord(type="investigation_enqueue_failed", reference_id=str(event_id), detail=str(exc)[:500]))
 
 
-def _dispatch(job: InvestigationJob | CodeDiagnosisJob | DatabaseJob) -> None:
+def enqueue_finance_diagnosis(*, event_id: int, escalation_id: int, system: str, environment: str, priority: str, stripe_key_env_var: str, parent_investigation_id: int) -> None:
+    job = FinanceJob(
+        event_id=event_id, escalation_id=escalation_id, system=system, environment=environment,
+        priority=priority, stripe_key_env_var=stripe_key_env_var, parent_investigation_id=parent_investigation_id,
+    )
+    try:
+        _queue.put_nowait(job)
+    except Exception as exc:
+        with session_scope() as session:
+            session.add(AuditRecord(type="investigation_enqueue_failed", reference_id=str(event_id), detail=str(exc)[:500]))
+
+
+def _dispatch(job: InvestigationJob | CodeDiagnosisJob | DatabaseJob | FinanceJob) -> None:
     if isinstance(job, CodeDiagnosisJob):
         from . import code_runner
         code_runner.run_code_diagnosis(job)
     elif isinstance(job, DatabaseJob):
         from . import database_runner
         database_runner.run_database_diagnosis(job)
+    elif isinstance(job, FinanceJob):
+        from . import finance_runner
+        finance_runner.run_finance_diagnosis(job)
     elif isinstance(job, InvestigationJob):
         from . import runner
         runner.run_investigation(job)

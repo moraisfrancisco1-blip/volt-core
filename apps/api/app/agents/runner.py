@@ -129,6 +129,7 @@ def _persist_success(job: InvestigationJob, submitted: dict[str, Any], response:
     if is_known_pattern is False:
         _maybe_chain_to_code_diagnosis(job, parent_investigation_id=investigation_id)
         _maybe_chain_to_database_diagnosis(job, parent_investigation_id=investigation_id)
+        _maybe_chain_to_finance_diagnosis(job, parent_investigation_id=investigation_id)
 
 
 def _maybe_chain_to_code_diagnosis(job: InvestigationJob, *, parent_investigation_id: int) -> None:
@@ -178,6 +179,38 @@ def _maybe_chain_to_database_diagnosis(job: InvestigationJob, *, parent_investig
             system=job.system,
             environment=job.environment,
             priority=job.priority,
+            parent_investigation_id=parent_investigation_id,
+        )
+    except Exception as exc:
+        with session_scope() as session:
+            session.add(AuditRecord(type="investigation_chain_failed", reference_id=str(job.event_id), detail=str(exc)[:500]))
+
+
+def _maybe_chain_to_finance_diagnosis(job: InvestigationJob, *, parent_investigation_id: int) -> None:
+    # Like Dev/Debug (not like the Database Agent): there's a per-system mapping to
+    # resolve, and without it this skips with an audit record, it doesn't fail.
+    try:
+        from .dispatcher import enqueue_finance_diagnosis
+        from .stripe_config import resolve_stripe_key_env_var
+
+        env_var = resolve_stripe_key_env_var(job.system)
+        if env_var is None:
+            with session_scope() as session:
+                session.add(
+                    AuditRecord(
+                        type="investigation_chain_skipped_no_stripe_mapping",
+                        reference_id=str(job.event_id),
+                        detail=f"system={job.system} has no VOLT_SYSTEM_STRIPE mapping",
+                    )
+                )
+            return
+        enqueue_finance_diagnosis(
+            event_id=job.event_id,
+            escalation_id=job.escalation_id,
+            system=job.system,
+            environment=job.environment,
+            priority=job.priority,
+            stripe_key_env_var=env_var,
             parent_investigation_id=parent_investigation_id,
         )
     except Exception as exc:

@@ -3,9 +3,10 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from app.agents import dispatcher, repo_config, runner
+from app.agents import dispatcher, repo_config, runner, stripe_config
 from app.agents.database_tools import DatabaseJob
 from app.agents.github_tools import CodeDiagnosisJob
+from app.agents.stripe_tools import FinanceJob
 from app.agents.tools import InvestigationJob
 from app.db import session_scope
 from app.models import AgentInvestigationRecord, AuditRecord, EventRecord
@@ -150,6 +151,7 @@ def test_unknown_pattern_investigation_chains_to_code_diagnosis(monkeypatch):
     fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
     monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
     monkeypatch.setattr(repo_config, "resolve_repo", lambda system: ("acme", "widget"))
+    monkeypatch.setattr(stripe_config, "resolve_stripe_key_env_var", lambda system: "STRIPE_SECRET_KEY_TEST")
     event_id = _seed_event("runner-chain-unknown-system")
     job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-chain-unknown-system", environment="production", priority="P2")
 
@@ -159,20 +161,26 @@ def test_unknown_pattern_investigation_chains_to_code_diagnosis(monkeypatch):
 
     parent = _latest_investigation(event_id)
     assert parent.investigation_type == "voice_call_failure"
-    # Both follow-ups fire independently for a novel incident: Dev/Debug (repo mapping
-    # resolved) and Database (no mapping to resolve, always fires).
-    assert fresh_queue.qsize() == 2
-    chained_jobs = [fresh_queue.get_nowait(), fresh_queue.get_nowait()]
+    # All three follow-ups fire independently for a novel incident: Dev/Debug (repo
+    # mapping resolved), Database (no mapping to resolve, always fires), and Finance
+    # (Stripe mapping resolved).
+    assert fresh_queue.qsize() == 3
+    chained_jobs = [fresh_queue.get_nowait() for _ in range(3)]
     code_jobs = [j for j in chained_jobs if isinstance(j, CodeDiagnosisJob)]
     database_jobs = [j for j in chained_jobs if isinstance(j, DatabaseJob)]
+    finance_jobs = [j for j in chained_jobs if isinstance(j, FinanceJob)]
     assert len(code_jobs) == 1
     assert len(database_jobs) == 1
+    assert len(finance_jobs) == 1
     assert code_jobs[0].event_id == event_id
     assert code_jobs[0].owner == "acme"
     assert code_jobs[0].repo == "widget"
     assert code_jobs[0].parent_investigation_id == parent.id
     assert database_jobs[0].event_id == event_id
     assert database_jobs[0].parent_investigation_id == parent.id
+    assert finance_jobs[0].event_id == event_id
+    assert finance_jobs[0].stripe_key_env_var == "STRIPE_SECRET_KEY_TEST"
+    assert finance_jobs[0].parent_investigation_id == parent.id
 
 
 def test_known_pattern_investigation_does_not_chain(monkeypatch):
@@ -193,6 +201,7 @@ def test_unknown_pattern_without_repo_mapping_skips_chain_and_audits(monkeypatch
     fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
     monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
     monkeypatch.setattr(repo_config, "resolve_repo", lambda system: None)
+    monkeypatch.setattr(stripe_config, "resolve_stripe_key_env_var", lambda system: "STRIPE_SECRET_KEY_TEST")
     event_id = _seed_event("runner-chain-no-mapping-system")
     job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-chain-no-mapping-system", environment="production", priority="P2")
 
@@ -204,11 +213,40 @@ def test_unknown_pattern_without_repo_mapping_skips_chain_and_audits(monkeypatch
     runner.run_investigation(job)
 
     # Dev/Debug skips (no repo mapping), but the database chain has no mapping to
-    # resolve and fires regardless -- the one asymmetry between the two chains.
-    assert fresh_queue.qsize() == 1
-    chained_job = fresh_queue.get_nowait()
-    assert isinstance(chained_job, DatabaseJob)
-    assert chained_job.event_id == event_id
+    # resolve and fires regardless, and the finance chain fires because its own
+    # (independent) Stripe mapping resolves fine.
+    assert fresh_queue.qsize() == 2
+    chained_jobs = [fresh_queue.get_nowait(), fresh_queue.get_nowait()]
+    assert any(isinstance(j, DatabaseJob) and j.event_id == event_id for j in chained_jobs)
+    assert any(isinstance(j, FinanceJob) and j.event_id == event_id for j in chained_jobs)
     with session_scope() as session:
         after = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_chain_skipped_no_repo_mapping", AuditRecord.reference_id == str(event_id))).all())
+    assert after == before + 1
+
+
+def test_unknown_pattern_without_stripe_mapping_skips_finance_chain_and_audits(monkeypatch):
+    fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
+    monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
+    monkeypatch.setattr(repo_config, "resolve_repo", lambda system: ("acme", "widget"))
+    monkeypatch.setattr(stripe_config, "resolve_stripe_key_env_var", lambda system: None)
+    event_id = _seed_event("runner-chain-no-stripe-mapping-system")
+    job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-chain-no-stripe-mapping-system", environment="production", priority="P2")
+
+    with session_scope() as session:
+        before = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_chain_skipped_no_stripe_mapping", AuditRecord.reference_id == str(event_id))).all())
+
+    monkeypatch.setattr(runner, "_call_model", lambda client, messages: _submit_response(is_known_pattern=False))
+
+    runner.run_investigation(job)
+
+    # Finance skips (no Stripe mapping), but Dev/Debug (repo mapping resolved) and
+    # Database (no mapping to resolve) still fire -- the finance chain's own failure
+    # mode never blocks the others.
+    assert fresh_queue.qsize() == 2
+    chained_jobs = [fresh_queue.get_nowait(), fresh_queue.get_nowait()]
+    assert any(isinstance(j, CodeDiagnosisJob) and j.event_id == event_id for j in chained_jobs)
+    assert any(isinstance(j, DatabaseJob) and j.event_id == event_id for j in chained_jobs)
+    assert not any(isinstance(j, FinanceJob) for j in chained_jobs)
+    with session_scope() as session:
+        after = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_chain_skipped_no_stripe_mapping", AuditRecord.reference_id == str(event_id))).all())
     assert after == before + 1
