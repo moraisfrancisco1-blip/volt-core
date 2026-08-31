@@ -1,11 +1,22 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import Sidebar from './components/Sidebar.jsx';
+import CoreHero from './components/CoreHero.jsx';
+import SystemOverview from './components/SystemOverview.jsx';
+import EventFeed from './components/EventFeed.jsx';
+import AgentGrid from './components/AgentGrid.jsx';
+import EscalationQueue from './components/EscalationQueue.jsx';
+import QuickCommands from './components/QuickCommands.jsx';
+import SystemMonitor from './components/SystemMonitor.jsx';
+import InvestigationHistory from './components/InvestigationHistory.jsx';
+import IntegrationsPanel from './components/IntegrationsPanel.jsx';
 
 const API = (import.meta.env.VITE_API_URL || 'https://api-production-c073.up.railway.app').replace(/\/$/, '');
+const INVESTIGATIONS_FETCH_LIMIT = 100;
 
 // Mirrors each reactive agent's investigation_type -- kept in sync manually with the
-// backend (apps/api/app/agents/*_runner.py), same as agents/status_router.py does.
+// backend (apps/api/app/agents/*_runner.py and agents/status_router.py).
 const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor'];
 const AGENT_LABELS = {
   volt: ['VOLT', 'voice_call_failure'],
@@ -14,17 +25,19 @@ const AGENT_LABELS = {
   finance: ['FINANCE', 'finance_diagnosis'],
   production_monitor: ['PRODUCTION MONITOR', null],
 };
-const STATE_LABELS = { working: 'A TRABALHAR', error: 'ERRO', idle: 'IDLE' };
 
-function truncate(text, max = 80) {
+function truncate(text, max = 60) {
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function sweepTag(sweep) {
-  if (sweep.status === 'failed') return 'ERRO';
-  if (sweep.event_action === 'created' || sweep.event_action === 'deduped') return 'AVISO';
-  return 'OK';
+function useClock() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return now;
 }
 
 function App() {
@@ -34,19 +47,22 @@ function App() {
   const [investigations, setInvestigations] = useState([]);
   const [sweeps, setSweeps] = useState([]);
   const [agentsStatus, setAgentsStatus] = useState([]);
+  const [integrationsStatus, setIntegrationsStatus] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const now = useClock();
 
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, agentsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
-        fetch(`${API}/api/investigations?limit=100`, { cache: 'no-store' }),
+        fetch(`${API}/api/investigations?limit=${INVESTIGATIONS_FETCH_LIMIT}`, { cache: 'no-store' }),
         fetch(`${API}/api/monitoring-sweeps?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/agents/status`, { cache: 'no-store' }),
+        fetch(`${API}/api/integrations/status`, { cache: 'no-store' }),
       ]);
       if (!dashboardResponse.ok) throw new Error(`dashboard unavailable (${dashboardResponse.status})`);
       if (!eventsResponse.ok) throw new Error(`event history unavailable (${eventsResponse.status})`);
@@ -54,12 +70,14 @@ function App() {
       if (!investigationsResponse.ok) throw new Error(`agent investigations unavailable (${investigationsResponse.status})`);
       if (!sweepsResponse.ok) throw new Error(`monitoring sweeps unavailable (${sweepsResponse.status})`);
       if (!agentsStatusResponse.ok) throw new Error(`agent status unavailable (${agentsStatusResponse.status})`);
+      if (!integrationsStatusResponse.ok) throw new Error(`integrations status unavailable (${integrationsStatusResponse.status})`);
       setDashboard(await dashboardResponse.json());
       setEvents(await eventsResponse.json());
       setEscalations(await escalationsResponse.json());
       setInvestigations(await investigationsResponse.json());
       setSweeps(await sweepsResponse.json());
       setAgentsStatus(await agentsStatusResponse.json());
+      setIntegrationsStatus(await integrationsStatusResponse.json());
     } catch (err) {
       setError(err?.message || 'dashboard unavailable');
     } finally { setLoading(false); }
@@ -67,68 +85,120 @@ function App() {
 
   useEffect(() => { load(); const timer = setInterval(load, 15000); return () => clearInterval(timer); }, [load]);
 
-  const systems = dashboard?.systems || [];
-  const monitorTargets = dashboard?.monitoring?.targets || [];
-  const statusByAgent = Object.fromEntries(agentsStatus.map(row => [row.agent, row]));
+  const activeEscalations = escalations.filter(item => !['completed', 'cancelled'].includes(item.status));
+  const activeCritical = activeEscalations.filter(item => ['P1', 'P2'].includes(item.priority));
+
+  const integrationsByName = Object.fromEntries(integrationsStatus.map(row => [row.name, row]));
+  const twilioConfigured = integrationsByName.twilio?.configured || false;
+  const railwayConfigured = integrationsByName.railway?.configured || false;
+
   const investigationsByType = investigations.reduce((acc, item) => {
     const list = acc[item.investigation_type] || (acc[item.investigation_type] = []);
     list.push(item);
     return acc;
   }, {});
-  const agentFeedItems = (agentId) => {
+  const statusByAgent = Object.fromEntries(agentsStatus.map(row => [row.agent, row]));
+  const agentsForGrid = AGENT_ORDER.map(agentId => {
+    const [label, investigationType] = AGENT_LABELS[agentId];
+    const state = statusByAgent[agentId]?.state || 'idle';
+    let lastActivityText = '';
     if (agentId === 'production_monitor') {
-      return sweeps.slice(0, 5).map(sweep => ({
-        key: sweep.id, time: sweep.completed_at || sweep.created_at,
-        label: sweepTag(sweep), text: sweep.summary || sweep.error || 'sem resumo',
-      }));
+      const latest = sweeps[0];
+      lastActivityText = latest ? truncate(latest.summary || latest.error || 'sem resumo') : '';
+    } else {
+      const latest = (investigationsByType[investigationType] || [])[0];
+      lastActivityText = latest ? truncate((latest.status === 'failed' ? latest.error : latest.hypothesis) || 'sem resumo') : '';
     }
-    const list = investigationsByType[AGENT_LABELS[agentId][1]] || [];
-    return list.slice(0, 5).map(item => ({
-      key: item.id, time: item.completed_at || item.created_at,
-      label: (item.status || 'pending').toUpperCase(),
-      text: (item.status === 'failed' ? item.error : item.hypothesis) || 'sem resumo',
-    }));
-  };
-  const activeEscalations = escalations.filter(item => !['completed', 'cancelled'].includes(item.status));
-  const activeCritical = activeEscalations.filter(item => ['P1', 'P2'].includes(item.priority));
-  const activeCalls = activeEscalations.filter(item => item.action === 'call');
-  const overdue = activeEscalations.filter(item => item.overdue);
-  const modules = [
-    ['CORE', dashboard?.core?.toUpperCase() || (loading ? 'CHECKING' : 'OFFLINE'), 'Orchestrator'],
-    ['WATCH', dashboard ? 'ONLINE' : (loading ? 'CHECKING' : 'OFFLINE'), `${events.length} events received`],
-    ['CONNECT', dashboard ? 'READY' : (loading ? 'CHECKING' : 'OFFLINE'), `${systems.length} systems connected`],
-    ['VOICE', activeCalls.length ? 'READY' : 'STANDBY', activeCalls.length ? `${activeCalls.length} P1-P3 calls queued` : `${activeEscalations.length} escalations tracked`],
-  ];
+    return { id: agentId, label, state, lastActivityText };
+  });
 
-  return <main className="app-shell">
-    <header className="topbar"><div><p className="eyebrow">AI OPERATIONS CENTER</p><h1>VOLT CORE</h1></div><div className="system-status">{dashboard?.core === 'online' ? 'SYSTEM ONLINE' : loading ? 'SYSTEM CHECK' : 'SYSTEM OFFLINE'}</div></header>
-    <section className="core-card"><div className="core-orb">VOLT</div><div><p className="eyebrow">CENTRAL INTELLIGENCE</p><h2>Observe. Analyse. Coordinate.</h2><p>Mode: {dashboard?.mode || (loading ? 'starting' : 'unavailable')}. Production writes: {dashboard?.production_write ? 'enabled' : 'disabled'}.</p></div></section>
-    <section className="module-grid">{modules.map(([name, moduleStatus, description]) => <article className="module-card" key={name}><div className="module-header"><h3>VOLT {name}</h3><span className="status">{moduleStatus}</span></div><p>{description}</p></article>)}</section>
-    <section className="priority-card"><p className="eyebrow">ESCALATION QUEUE</p><h2>{activeCritical.length} critical items</h2><p>{activeEscalations.length} active · {overdue.length} overdue · P1/P2/P3 = call · P4 = digest</p></section>
-    <section>
-      <p className="eyebrow">INVESTIGAÇÕES DOS AGENTES</p>
-      <div className="agent-grid">
-        {AGENT_ORDER.map(agentId => {
-          const [label] = AGENT_LABELS[agentId];
-          const state = statusByAgent[agentId]?.state || 'idle';
-          const items = agentFeedItems(agentId);
-          return <article className="agent-card" key={agentId}>
-            <div className="module-header"><h3>{label}</h3><span className={`status state-${state}`}>{STATE_LABELS[state] || STATE_LABELS.idle}</span></div>
-            <div className="agent-feed">
-              {items.length === 0
-                ? <div className="empty-state">Sem histórico ainda.</div>
-                : items.map(item => <div className="event-row" key={item.key}><strong>{item.label}</strong> · {item.time ? new Date(item.time).toLocaleString() : 'sem hora'} · {truncate(item.text)}</div>)}
+  const systemOk = (dashboard?.core === 'online') && activeCritical.length === 0;
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="row" style={{ gap: 12 }}>
+          <div className="brand-mark">
+            <svg width="16" height="16" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z" fill="#120e0a" /></svg>
+          </div>
+          <div>
+            <div className="display brand-name">VOLT</div>
+            <div className="mono brand-sub">COMMAND CENTER</div>
+          </div>
+        </div>
+
+        <div className="row system-pill">
+          <span className="system-pill-dot" />
+          <span className="mono system-pill-text">SISTEMA · {dashboard?.core === 'online' ? 'OPERACIONAL' : loading ? 'A VERIFICAR' : 'OFFLINE'}</span>
+        </div>
+
+        <div className="mono topbar-datetime">
+          <div className="topbar-date">{now.toLocaleDateString('pt-PT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
+          <div className="topbar-time">{now.toLocaleTimeString('pt-PT')}</div>
+        </div>
+
+        <div className="row topbar-icons">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#a89680" strokeWidth="1.7"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+          <div style={{ position: 'relative' }}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#a89680" strokeWidth="1.7"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></svg>
+            {activeCritical.length > 0 && <span className="notif-dot" />}
+          </div>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#a89680" strokeWidth="1.7"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1z" /></svg>
+          <div className="row avatar-block">
+            <div className="mono avatar-circle">FM</div>
+            <div>
+              <div className="avatar-name">Francisco</div>
+              <div className="mono avatar-role">OPERADOR</div>
             </div>
-          </article>;
-        })}
+          </div>
+        </div>
+      </header>
+
+      <div className="body-row">
+        <Sidebar twilioConfigured={twilioConfigured} />
+
+        <div className="main-content">
+          <div className="row-1">
+            <SystemOverview
+              investigationCount={investigations.length}
+              twilioConfigured={twilioConfigured}
+              agentsStatus={agentsStatus}
+              systemOk={systemOk}
+              iconColor="#f0b429"
+            />
+            <CoreHero />
+            <EventFeed events={events} />
+          </div>
+
+          <div className="row-2">
+            <AgentGrid agents={agentsForGrid} />
+            <EscalationQueue escalations={activeEscalations} />
+            <QuickCommands apiBase={API} />
+          </div>
+
+          <div className="row-3">
+            <SystemMonitor railwayConfigured={railwayConfigured} />
+            <InvestigationHistory investigations={investigations} fetchLimit={INVESTIGATIONS_FETCH_LIMIT} />
+            <IntegrationsPanel integrations={integrationsStatus} />
+          </div>
+
+          <div className="row footer-row">
+            <div className="row mono footer-meta">
+              <span>Schiedam, NL</span>
+              <span>·</span>
+              <span>Ambiente: {dashboard?.mode === 'observe' ? 'Produção' : dashboard?.mode || '—'}</span>
+              <span>·</span>
+              <span>{error ? 'Erro na última atualização' : loading ? 'A carregar…' : 'Atualizado agora'}</span>
+            </div>
+            <div className="row footer-cta">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#14100c" strokeWidth="2.2"><path d="M12 5v14M5 12h14" /></svg>
+              <span className="mono footer-cta-text">NOVA INVESTIGAÇÃO</span>
+            </div>
+          </div>
+        </div>
       </div>
-    </section>
-    <section className="activity-card"><p className="eyebrow">MONITORING RUNTIME</p><p>{dashboard?.monitoring?.started ? 'Monitor active' : 'Monitor not started'} · {dashboard?.monitoring?.target_count ?? 0} target(s) · every {dashboard?.monitoring?.interval_seconds ?? '—'} seconds</p>{monitorTargets.length === 0 ? <div className="empty-state">Waiting for a configured monitoring target.</div> : monitorTargets.map(target => <div className="event-row" key={target.system_id}><strong>{target.last_ok === true ? 'ONLINE' : target.last_ok === false ? 'CHECK FAILED' : 'CHECKING'}</strong> · {target.system_name} · last check {target.last_checked_at ? new Date(target.last_checked_at).toLocaleString() : 'pending'} · failures {target.consecutive_failures} · {target.last_detail || 'no result yet'}</div>)}</section>
-    <section className="activity-card"><p className="eyebrow">VARREDURAS DO PRODUCTION MONITOR</p>{sweeps.length === 0 ? <div className="empty-state">Sem varreduras ainda.</div> : sweeps.map(sweep => <div className="event-row" key={sweep.id}><strong>{sweepTag(sweep)}</strong> · {sweep.system} · {sweep.summary || sweep.error || 'sem resumo'} · {(sweep.completed_at || sweep.created_at) ? new Date(sweep.completed_at || sweep.created_at).toLocaleString() : '—'}</div>)}</section>
-    <section className="activity-card"><p className="eyebrow">DECISION & SLA QUEUE</p>{activeEscalations.length === 0 ? <div className="empty-state">No active escalations.</div> : activeEscalations.map(item => <div className="event-row" key={item.id}><strong>{item.priority}</strong> · {item.system} · {item.action} · {item.status} · SLA {item.sla_minutes ?? '—'} min · due {item.due_at ? new Date(item.due_at).toLocaleString() : '—'} {item.overdue ? '· OVERDUE' : ''}</div>)}</section>
-    <section className="activity-card"><p className="eyebrow">MONITORED SYSTEMS</p>{systems.length === 0 ? <div className="empty-state">Waiting for the first monitored system.</div> : systems.map(system => <div className="event-row" key={system.name}><strong>{system.status || 'unknown'}</strong> · {system.name} · {system.environment || 'production'} · last signal {system.updated_at ? new Date(system.updated_at).toLocaleString() : 'not available'}</div>)}</section>
-    <section className="activity-card"><p className="eyebrow">LIVE ACTIVITY</p>{loading ? <div className="empty-state">Loading live data...</div> : error && !dashboard ? <div className="empty-state">Unable to load live data. Retrying automatically...</div> : events.length === 0 ? <div className="empty-state">Waiting for the first event.</div> : events.map(event => <div className="event-row" key={event.id}><strong>{(event.severity || event.priority || 'EVENT').toUpperCase()} {event.priority ? `· ${event.priority}` : ''}</strong> · {event.system_name || event.system_id || 'unknown system'} · {event.title || event.message} · {event.status || 'active'} · {event.recommended_action || 'review'}</div>)}</section>
-  </main>;
+    </div>
+  );
 }
 
 createRoot(document.getElementById('root')).render(<App />);
