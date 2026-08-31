@@ -1,8 +1,12 @@
+import os
+import threading
+
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 
 from ..db import session_scope
 from ..models import MonitoringSweepRecord
+from . import production_monitor
 
 router = APIRouter(prefix="/api", tags=["monitoring-sweeps"])
 
@@ -43,6 +47,18 @@ def list_monitoring_sweeps(
             statement = statement.where(MonitoringSweepRecord.status == normalized)
         rows = session.scalars(statement.order_by(MonitoringSweepRecord.id.desc()).limit(limit)).all()
         return [sweep_dict(row) for row in rows]
+
+
+@router.post("/monitoring-sweeps/run")
+def trigger_sweep() -> dict:
+    # Fires the same run_sweep() the periodic thread already calls on its own
+    # schedule -- this just runs it now instead of waiting. Never blocks the
+    # request: run_sweep() makes real Anthropic API calls per mapped system, same
+    # "never block the caller" discipline as dispatcher.py's worker thread.
+    if not (os.getenv("ANTHROPIC_API_KEY") and os.getenv("RAILWAY_TOKEN")):
+        return {"triggered": False, "reason": "ANTHROPIC_API_KEY or RAILWAY_TOKEN not configured"}
+    threading.Thread(target=production_monitor.run_sweep, daemon=True).start()
+    return {"triggered": True}
 
 
 @router.get("/monitoring-sweeps/{sweep_id}")

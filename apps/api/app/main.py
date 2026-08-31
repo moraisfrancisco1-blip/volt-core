@@ -12,6 +12,7 @@ from .agents.production_monitor import start_production_monitor
 from .agents.production_monitor_router import router as monitoring_sweeps_router
 from .agents.router import router as investigations_router
 from .agents.status_router import router as agent_status_router
+from .integrations_router import VOLT_CORS_ORIGINS, router as integrations_status_router
 from .db import session_scope
 from .models import SystemRecord, EventRecord, ApprovalRecord, VoiceCallRecord, ActionRecord, AuditRecord
 from .auth import Principal, authenticate, require_scope
@@ -20,11 +21,12 @@ from .event_history import router as event_history_router, EventIngestion, creat
 from .monitoring import start_monitoring, monitoring_status, run_controlled_self_test
 
 app = FastAPI(title="VOLT CORE", version="1.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=["https://volt-core.vercel.app", "https://volt-core-git-main-voltaris-os.vercel.app"], allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "OPTIONS"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=VOLT_CORS_ORIGINS, allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "OPTIONS"], allow_headers=["*"])
 app.include_router(event_history_router)
 app.include_router(investigations_router)
 app.include_router(monitoring_sweeps_router)
 app.include_router(agent_status_router)
+app.include_router(integrations_status_router)
 voice_provider = get_voice_provider()
 
 @app.on_event("startup")
