@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 
 from app.agents import dispatcher, repo_config, runner
+from app.agents.database_tools import DatabaseJob
 from app.agents.github_tools import CodeDiagnosisJob
 from app.agents.tools import InvestigationJob
 from app.db import session_scope
@@ -158,13 +159,20 @@ def test_unknown_pattern_investigation_chains_to_code_diagnosis(monkeypatch):
 
     parent = _latest_investigation(event_id)
     assert parent.investigation_type == "voice_call_failure"
-    assert fresh_queue.qsize() == 1
-    chained_job = fresh_queue.get_nowait()
-    assert isinstance(chained_job, CodeDiagnosisJob)
-    assert chained_job.event_id == event_id
-    assert chained_job.owner == "acme"
-    assert chained_job.repo == "widget"
-    assert chained_job.parent_investigation_id == parent.id
+    # Both follow-ups fire independently for a novel incident: Dev/Debug (repo mapping
+    # resolved) and Database (no mapping to resolve, always fires).
+    assert fresh_queue.qsize() == 2
+    chained_jobs = [fresh_queue.get_nowait(), fresh_queue.get_nowait()]
+    code_jobs = [j for j in chained_jobs if isinstance(j, CodeDiagnosisJob)]
+    database_jobs = [j for j in chained_jobs if isinstance(j, DatabaseJob)]
+    assert len(code_jobs) == 1
+    assert len(database_jobs) == 1
+    assert code_jobs[0].event_id == event_id
+    assert code_jobs[0].owner == "acme"
+    assert code_jobs[0].repo == "widget"
+    assert code_jobs[0].parent_investigation_id == parent.id
+    assert database_jobs[0].event_id == event_id
+    assert database_jobs[0].parent_investigation_id == parent.id
 
 
 def test_known_pattern_investigation_does_not_chain(monkeypatch):
@@ -195,7 +203,12 @@ def test_unknown_pattern_without_repo_mapping_skips_chain_and_audits(monkeypatch
 
     runner.run_investigation(job)
 
-    assert fresh_queue.empty()
+    # Dev/Debug skips (no repo mapping), but the database chain has no mapping to
+    # resolve and fires regardless -- the one asymmetry between the two chains.
+    assert fresh_queue.qsize() == 1
+    chained_job = fresh_queue.get_nowait()
+    assert isinstance(chained_job, DatabaseJob)
+    assert chained_job.event_id == event_id
     with session_scope() as session:
         after = len(session.scalars(select(AuditRecord).where(AuditRecord.type == "investigation_chain_skipped_no_repo_mapping", AuditRecord.reference_id == str(event_id))).all())
     assert after == before + 1
