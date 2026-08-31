@@ -4,27 +4,62 @@ import './styles.css';
 
 const API = (import.meta.env.VITE_API_URL || 'https://api-production-c073.up.railway.app').replace(/\/$/, '');
 
+// Mirrors each reactive agent's investigation_type -- kept in sync manually with the
+// backend (apps/api/app/agents/*_runner.py), same as agents/status_router.py does.
+const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor'];
+const AGENT_LABELS = {
+  volt: ['VOLT', 'voice_call_failure'],
+  dev_debug: ['DEV/DEBUG', 'code_diagnosis'],
+  database: ['DATABASE', 'database_diagnosis'],
+  finance: ['FINANCE', 'finance_diagnosis'],
+  production_monitor: ['PRODUCTION MONITOR', null],
+};
+const STATE_LABELS = { working: 'A TRABALHAR', error: 'ERRO', idle: 'IDLE' };
+
+function truncate(text, max = 80) {
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function sweepTag(sweep) {
+  if (sweep.status === 'failed') return 'ERRO';
+  if (sweep.event_action === 'created' || sweep.event_action === 'deduped') return 'AVISO';
+  return 'OK';
+}
+
 function App() {
   const [dashboard, setDashboard] = useState(null);
   const [events, setEvents] = useState([]);
   const [escalations, setEscalations] = useState([]);
+  const [investigations, setInvestigations] = useState([]);
+  const [sweeps, setSweeps] = useState([]);
+  const [agentsStatus, setAgentsStatus] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, agentsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
+        fetch(`${API}/api/investigations?limit=100`, { cache: 'no-store' }),
+        fetch(`${API}/api/monitoring-sweeps?limit=20`, { cache: 'no-store' }),
+        fetch(`${API}/api/agents/status`, { cache: 'no-store' }),
       ]);
       if (!dashboardResponse.ok) throw new Error(`dashboard unavailable (${dashboardResponse.status})`);
       if (!eventsResponse.ok) throw new Error(`event history unavailable (${eventsResponse.status})`);
       if (!escalationsResponse.ok) throw new Error(`escalation queue unavailable (${escalationsResponse.status})`);
+      if (!investigationsResponse.ok) throw new Error(`agent investigations unavailable (${investigationsResponse.status})`);
+      if (!sweepsResponse.ok) throw new Error(`monitoring sweeps unavailable (${sweepsResponse.status})`);
+      if (!agentsStatusResponse.ok) throw new Error(`agent status unavailable (${agentsStatusResponse.status})`);
       setDashboard(await dashboardResponse.json());
       setEvents(await eventsResponse.json());
       setEscalations(await escalationsResponse.json());
+      setInvestigations(await investigationsResponse.json());
+      setSweeps(await sweepsResponse.json());
+      setAgentsStatus(await agentsStatusResponse.json());
     } catch (err) {
       setError(err?.message || 'dashboard unavailable');
     } finally { setLoading(false); }
@@ -34,6 +69,26 @@ function App() {
 
   const systems = dashboard?.systems || [];
   const monitorTargets = dashboard?.monitoring?.targets || [];
+  const statusByAgent = Object.fromEntries(agentsStatus.map(row => [row.agent, row]));
+  const investigationsByType = investigations.reduce((acc, item) => {
+    const list = acc[item.investigation_type] || (acc[item.investigation_type] = []);
+    list.push(item);
+    return acc;
+  }, {});
+  const agentFeedItems = (agentId) => {
+    if (agentId === 'production_monitor') {
+      return sweeps.slice(0, 5).map(sweep => ({
+        key: sweep.id, time: sweep.completed_at || sweep.created_at,
+        label: sweepTag(sweep), text: sweep.summary || sweep.error || 'sem resumo',
+      }));
+    }
+    const list = investigationsByType[AGENT_LABELS[agentId][1]] || [];
+    return list.slice(0, 5).map(item => ({
+      key: item.id, time: item.completed_at || item.created_at,
+      label: (item.status || 'pending').toUpperCase(),
+      text: (item.status === 'failed' ? item.error : item.hypothesis) || 'sem resumo',
+    }));
+  };
   const activeEscalations = escalations.filter(item => !['completed', 'cancelled'].includes(item.status));
   const activeCritical = activeEscalations.filter(item => ['P1', 'P2'].includes(item.priority));
   const activeCalls = activeEscalations.filter(item => item.action === 'call');
@@ -50,7 +105,26 @@ function App() {
     <section className="core-card"><div className="core-orb">VOLT</div><div><p className="eyebrow">CENTRAL INTELLIGENCE</p><h2>Observe. Analyse. Coordinate.</h2><p>Mode: {dashboard?.mode || (loading ? 'starting' : 'unavailable')}. Production writes: {dashboard?.production_write ? 'enabled' : 'disabled'}.</p></div></section>
     <section className="module-grid">{modules.map(([name, moduleStatus, description]) => <article className="module-card" key={name}><div className="module-header"><h3>VOLT {name}</h3><span className="status">{moduleStatus}</span></div><p>{description}</p></article>)}</section>
     <section className="priority-card"><p className="eyebrow">ESCALATION QUEUE</p><h2>{activeCritical.length} critical items</h2><p>{activeEscalations.length} active · {overdue.length} overdue · P1/P2/P3 = call · P4 = digest</p></section>
+    <section>
+      <p className="eyebrow">INVESTIGAÇÕES DOS AGENTES</p>
+      <div className="agent-grid">
+        {AGENT_ORDER.map(agentId => {
+          const [label] = AGENT_LABELS[agentId];
+          const state = statusByAgent[agentId]?.state || 'idle';
+          const items = agentFeedItems(agentId);
+          return <article className="agent-card" key={agentId}>
+            <div className="module-header"><h3>{label}</h3><span className={`status state-${state}`}>{STATE_LABELS[state] || STATE_LABELS.idle}</span></div>
+            <div className="agent-feed">
+              {items.length === 0
+                ? <div className="empty-state">Sem histórico ainda.</div>
+                : items.map(item => <div className="event-row" key={item.key}><strong>{item.label}</strong> · {item.time ? new Date(item.time).toLocaleString() : 'sem hora'} · {truncate(item.text)}</div>)}
+            </div>
+          </article>;
+        })}
+      </div>
+    </section>
     <section className="activity-card"><p className="eyebrow">MONITORING RUNTIME</p><p>{dashboard?.monitoring?.started ? 'Monitor active' : 'Monitor not started'} · {dashboard?.monitoring?.target_count ?? 0} target(s) · every {dashboard?.monitoring?.interval_seconds ?? '—'} seconds</p>{monitorTargets.length === 0 ? <div className="empty-state">Waiting for a configured monitoring target.</div> : monitorTargets.map(target => <div className="event-row" key={target.system_id}><strong>{target.last_ok === true ? 'ONLINE' : target.last_ok === false ? 'CHECK FAILED' : 'CHECKING'}</strong> · {target.system_name} · last check {target.last_checked_at ? new Date(target.last_checked_at).toLocaleString() : 'pending'} · failures {target.consecutive_failures} · {target.last_detail || 'no result yet'}</div>)}</section>
+    <section className="activity-card"><p className="eyebrow">VARREDURAS DO PRODUCTION MONITOR</p>{sweeps.length === 0 ? <div className="empty-state">Sem varreduras ainda.</div> : sweeps.map(sweep => <div className="event-row" key={sweep.id}><strong>{sweepTag(sweep)}</strong> · {sweep.system} · {sweep.summary || sweep.error || 'sem resumo'} · {(sweep.completed_at || sweep.created_at) ? new Date(sweep.completed_at || sweep.created_at).toLocaleString() : '—'}</div>)}</section>
     <section className="activity-card"><p className="eyebrow">DECISION & SLA QUEUE</p>{activeEscalations.length === 0 ? <div className="empty-state">No active escalations.</div> : activeEscalations.map(item => <div className="event-row" key={item.id}><strong>{item.priority}</strong> · {item.system} · {item.action} · {item.status} · SLA {item.sla_minutes ?? '—'} min · due {item.due_at ? new Date(item.due_at).toLocaleString() : '—'} {item.overdue ? '· OVERDUE' : ''}</div>)}</section>
     <section className="activity-card"><p className="eyebrow">MONITORED SYSTEMS</p>{systems.length === 0 ? <div className="empty-state">Waiting for the first monitored system.</div> : systems.map(system => <div className="event-row" key={system.name}><strong>{system.status || 'unknown'}</strong> · {system.name} · {system.environment || 'production'} · last signal {system.updated_at ? new Date(system.updated_at).toLocaleString() : 'not available'}</div>)}</section>
     <section className="activity-card"><p className="eyebrow">LIVE ACTIVITY</p>{loading ? <div className="empty-state">Loading live data...</div> : error && !dashboard ? <div className="empty-state">Unable to load live data. Retrying automatically...</div> : events.length === 0 ? <div className="empty-state">Waiting for the first event.</div> : events.map(event => <div className="event-row" key={event.id}><strong>{(event.severity || event.priority || 'EVENT').toUpperCase()} {event.priority ? `· ${event.priority}` : ''}</strong> · {event.system_name || event.system_id || 'unknown system'} · {event.title || event.message} · {event.status || 'active'} · {event.recommended_action || 'review'}</div>)}</section>

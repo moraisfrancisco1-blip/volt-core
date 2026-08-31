@@ -14,6 +14,7 @@ from .tools import InvestigationJob
 _queue: "queue.Queue[InvestigationJob | CodeDiagnosisJob | DatabaseJob | FinanceJob]" = queue.Queue(maxsize=int(os.getenv("VOLT_AGENT_QUEUE_MAXSIZE", "50")))
 _started = False
 _lock = threading.Lock()
+_current_job_type: str | None = None
 
 
 def enqueue_investigation(*, event_id: int, escalation_id: int, system: str, environment: str, priority: str) -> None:
@@ -80,14 +81,36 @@ def _dispatch(job: InvestigationJob | CodeDiagnosisJob | DatabaseJob | FinanceJo
         raise TypeError(f"unroutable job type: {type(job).__name__}")
 
 
+def _job_investigation_type(job: InvestigationJob | CodeDiagnosisJob | DatabaseJob | FinanceJob) -> str:
+    # Mirrors the investigation_type values each runner persists -- kept in sync
+    # manually since there's no shared enum backing them.
+    if isinstance(job, CodeDiagnosisJob):
+        return "code_diagnosis"
+    if isinstance(job, DatabaseJob):
+        return "database_diagnosis"
+    if isinstance(job, FinanceJob):
+        return "finance_diagnosis"
+    return "voice_call_failure"  # InvestigationJob
+
+
+def current_job_type() -> str | None:
+    # The dashboard's only signal that an agent is actively working right now --
+    # no persisted job history captures this, since every runner only writes a
+    # record once it's done (success or failure), never a "pending" placeholder.
+    return _current_job_type
+
+
 def _worker_loop() -> None:
+    global _current_job_type
     while True:
         job = _queue.get()
+        _current_job_type = _job_investigation_type(job)
         try:
             _dispatch(job)
         except Exception as exc:
             print(f"[volt-agent] investigation failure: {type(exc).__name__}: {exc}")
         finally:
+            _current_job_type = None
             _queue.task_done()
 
 

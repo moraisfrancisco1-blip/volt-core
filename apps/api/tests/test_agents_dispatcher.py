@@ -224,6 +224,22 @@ def test_dispatch_raises_type_error_for_unrecognized_job_type():
         dispatcher._dispatch("not-a-real-job")
 
 
+def test_job_investigation_type_maps_every_job_type():
+    investigation_job = InvestigationJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1")
+    code_job = CodeDiagnosisJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1", owner="acme", repo="widget", parent_investigation_id=1)
+    database_job = DatabaseJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1", parent_investigation_id=1)
+    finance_job = FinanceJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1", stripe_key_env_var="STRIPE_SECRET_KEY_TEST", parent_investigation_id=1)
+
+    assert dispatcher._job_investigation_type(investigation_job) == "voice_call_failure"
+    assert dispatcher._job_investigation_type(code_job) == "code_diagnosis"
+    assert dispatcher._job_investigation_type(database_job) == "database_diagnosis"
+    assert dispatcher._job_investigation_type(finance_job) == "finance_diagnosis"
+
+
+def test_current_job_type_defaults_to_none():
+    assert dispatcher.current_job_type() == dispatcher._current_job_type
+
+
 def test_enqueue_finance_diagnosis_puts_a_well_formed_job(monkeypatch):
     fresh_queue: "queue.Queue" = queue.Queue(maxsize=10)
     monkeypatch.setattr(dispatcher, "_queue", fresh_queue)
