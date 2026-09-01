@@ -45,6 +45,24 @@ def queue_escalation(session, event: EventRecord) -> EscalationRecord:
     record = EscalationRecord(event_id=event.id, system=event.system, priority=event.priority, action=event.recommended_action, status="queued")
     session.add(record); session.flush(); session.add(AuditRecord(type="escalation_queued", reference_id=str(record.id), detail=f"event={event.id} priority={record.priority} action={record.action} sla={SLA_MINUTES.get(record.priority, 240)}m")); return record
 
+def trigger_manual_investigation(session, system_id: str, environment: str = "production") -> tuple[EventRecord, EscalationRecord]:
+    # Never goes through create_event/decide_event/dispatch_voice_call -- this isn't a
+    # real incident, it must never place a real Twilio call or duplicate the Telegram
+    # notification create_event already sends for genuine events. Builds the minimal
+    # EventRecord/EscalationRecord enqueue_investigation needs directly instead.
+    record = EventRecord(
+        system=system_id, system_id=system_id, system_name=system_id, environment=environment,
+        level="INFO", severity="info", priority="P3", event_type="manual_investigation_request",
+        title="Investigação manual pedida via Telegram",
+        recommended_action="investigate",  # never "call" -- queue_escalation copies this into escalation.action
+        message=f"Investigação manual pedida via Telegram para {system_id}.", status="active",
+    )
+    session.add(record); session.flush()
+    escalation = queue_escalation(session, record)
+    escalation.status = "completed"  # not a real SLA-bound escalation -- must never show as overdue
+    enqueue_investigation(event_id=record.id, escalation_id=escalation.id, system=system_id, environment=environment, priority=record.priority)
+    return record, escalation
+
 def should_auto_call(event: EventRecord) -> bool:
     metadata = event.metadata_ or {}
     if metadata.get("monitor_self_test") is True:

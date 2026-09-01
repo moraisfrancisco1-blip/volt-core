@@ -5,9 +5,9 @@ from sqlalchemy import select
 
 from app import escalations as escalations_module
 from app.db import session_scope
-from app.escalations import MAX_CALL_ATTEMPTS, process_overdue_escalations
+from app.escalations import MAX_CALL_ATTEMPTS, process_overdue_escalations, trigger_manual_investigation
 from app.main import app
-from app.models import EscalationRecord, VoiceCallRecord
+from app.models import EscalationRecord, EventRecord, VoiceCallRecord
 
 
 def _bootstrap(monkeypatch):
@@ -333,3 +333,37 @@ def test_failed_call_enqueues_exactly_one_investigation(monkeypatch):
         response = client.post("/api/voice/status", data={"CallSid": second_sid, "CallStatus": "no-answer"})
         assert response.status_code == 200
         assert len(enqueued) == 1
+
+
+# --- trigger_manual_investigation -- never a real event/call, only an investigation ---
+
+def test_trigger_manual_investigation_never_calls_dispatch_voice_call(monkeypatch):
+    calls = []
+    monkeypatch.setattr(escalations_module, "dispatch_voice_call", lambda *a, **k: calls.append(True))
+    monkeypatch.setattr(escalations_module, "enqueue_investigation", lambda **kwargs: None)
+
+    with session_scope() as session:
+        trigger_manual_investigation(session, "manual-trigger-system")
+
+    assert calls == []  # a manual diagnostic request must never place a real Twilio call
+
+
+def test_trigger_manual_investigation_enqueues_a_real_investigation(monkeypatch):
+    enqueued = []
+    monkeypatch.setattr(escalations_module, "enqueue_investigation", lambda **kwargs: enqueued.append(kwargs))
+
+    with session_scope() as session:
+        event, escalation = trigger_manual_investigation(session, "manual-trigger-system-2")
+        event_id, escalation_id = event.id, escalation.id
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["event_id"] == event_id
+    assert enqueued[0]["escalation_id"] == escalation_id
+    assert enqueued[0]["system"] == "manual-trigger-system-2"
+    with session_scope() as session:
+        event_row = session.get(EventRecord, event_id)
+        escalation_row = session.get(EscalationRecord, escalation_id)
+        assert event_row.event_type == "manual_investigation_request"
+        assert escalation_row.action == "investigate"
+        # Not a real SLA-bound escalation -- must never surface as active/overdue on the dashboard.
+        assert escalation_row.status == "completed"
