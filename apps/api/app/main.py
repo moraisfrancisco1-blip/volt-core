@@ -19,6 +19,7 @@ from .auth import Principal, authenticate, require_scope
 from .bootstrap import bootstrap_admin
 from .event_history import router as event_history_router, EventIngestion, create_event, event_dict as detailed_event_dict
 from .monitoring import start_monitoring, monitoring_status, run_controlled_self_test
+from .telegram import router as telegram_router
 
 app = FastAPI(title="VOLT CORE", version="1.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=VOLT_CORS_ORIGINS, allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "OPTIONS"], allow_headers=["*"])
@@ -27,6 +28,7 @@ app.include_router(investigations_router)
 app.include_router(monitoring_sweeps_router)
 app.include_router(agent_status_router)
 app.include_router(integrations_status_router)
+app.include_router(telegram_router)
 voice_provider = get_voice_provider()
 
 @app.on_event("startup")

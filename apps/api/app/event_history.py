@@ -10,6 +10,7 @@ from .db import session_scope
 from .decision_engine import BASE_PRIORITY, decide_event
 from .escalations import dispatch_voice_call, queue_escalation, router as escalation_router, sync_escalation_status
 from .models import AuditRecord, EventRecord, SystemRecord
+from .telegram import notify_telegram_channel
 
 router = APIRouter(prefix="/api", tags=["events"])
 router.include_router(escalation_router)
@@ -52,7 +53,7 @@ def create_event(session, payload: EventIngestion, principal: Principal) -> Even
     else:
         system.environment = payload.environment; system.status = "connected"
     record = EventRecord(system=payload.system_id, system_id=payload.system_id, system_name=payload.system_name or payload.system_id, environment=payload.environment, level=severity.upper(), severity=severity, priority=decision.priority, event_type=payload.event_type, title=payload.title or payload.message[:255], recommended_action=decision.action, message=payload.message, status="active", source=payload.source, metadata_=payload.metadata)
-    session.add(record); session.flush(); escalation = queue_escalation(session, record); dispatch_voice_call(session, record, escalation)
+    session.add(record); session.flush(); escalation = queue_escalation(session, record); dispatch_voice_call(session, record, escalation); notify_telegram_channel(record, escalation)
     session.add(AuditRecord(type="decision_made", reference_id=str(record.id), detail=f"priority={decision.priority}; action={decision.action}; reason={decision.reason}; duplicate={decision.duplicate}"))
     session.add(AuditRecord(type="event_received", reference_id=str(record.id), detail=f"{record.system} via {principal.name}"))
     return record
