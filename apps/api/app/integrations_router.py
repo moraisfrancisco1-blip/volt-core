@@ -9,13 +9,15 @@ VOLT_CORS_ORIGINS = ["https://volt-core.vercel.app", "https://volt-core-git-main
 router = APIRouter(prefix="/api", tags=["integrations"])
 
 
+def twilio_configured() -> bool:
+    # Shared with telegram.py's "status" command -- one place owns this condition.
+    return bool(os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN") and os.getenv("TWILIO_PHONE_NUMBER"))
+
+
 @router.get("/integrations/status")
 def integrations_status() -> list[dict]:
     # Presence only, never values -- same discipline as every credential check
     # elsewhere in this codebase (RAILWAY_TOKEN, GITHUB_TOKEN, etc.).
-    twilio_configured = bool(
-        os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN") and os.getenv("TWILIO_PHONE_NUMBER")
-    )
     return [
         {"name": "railway", "label": "Railway", "configured": bool(os.getenv("RAILWAY_TOKEN"))},
         {"name": "github", "label": "GitHub", "configured": bool(os.getenv("GITHUB_TOKEN"))},
@@ -26,6 +28,6 @@ def integrations_status() -> list[dict]:
         # Reflects whether DATABASE_URL was explicitly set, not the hardcoded local
         # dev fallback in db.py.
         {"name": "postgres", "label": "Postgres", "configured": bool(os.getenv("DATABASE_URL"))},
-        {"name": "twilio", "label": "Twilio", "configured": twilio_configured},
+        {"name": "twilio", "label": "Twilio", "configured": twilio_configured()},
         {"name": "anthropic", "label": "Anthropic API", "configured": bool(os.getenv("ANTHROPIC_API_KEY"))},
     ]
