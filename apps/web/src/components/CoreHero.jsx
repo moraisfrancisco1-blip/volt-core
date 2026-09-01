@@ -295,7 +295,10 @@ function CoreHero() {
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    return initCore(canvasRef.current);
+    // Temporarily disabled while a replacement design is prepared -- initCore
+    // itself is untouched, only this call is commented out. Re-enable by
+    // restoring the line below.
+    // return initCore(canvasRef.current);
   }, []); // Empty deps: runs once on mount, regardless of how often the parent re-renders.
 
   return (
