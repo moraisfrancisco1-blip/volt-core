@@ -143,6 +143,18 @@ class MonitoringSweepRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TelegramScheduleRecord(Base):
+    __tablename__ = "telegram_schedules"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    action: Mapped[str] = mapped_column(String(32))  # "sweep" | "investigate"
+    target: Mapped[str | None] = mapped_column(String(120), nullable=True)  # only for "investigate"
+    time_of_day: Mapped[str | None] = mapped_column(String(5), nullable=True)  # "HH:MM"
+    interval_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AuditRecord(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

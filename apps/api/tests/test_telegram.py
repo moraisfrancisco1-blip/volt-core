@@ -5,7 +5,7 @@ from app import telegram
 from app.agents import status_router
 from app.db import session_scope
 from app.main import app
-from app.models import AuditRecord, EscalationRecord, EventRecord
+from app.models import AuditRecord, EscalationRecord, EventRecord, TelegramScheduleRecord
 
 
 def _seed_event_and_escalation(system_id: str, *, priority: str = "P2", action: str = "call", status: str = "queued") -> tuple[int, int]:
@@ -111,7 +111,7 @@ def test_status_command_reports_real_counts(monkeypatch):
     ])
     monkeypatch.setattr(telegram, "twilio_configured", lambda: True)
 
-    reply = telegram.handle_telegram_command("status")
+    reply = telegram.handle_telegram_message("status")
 
     assert "Orquestrador: ATIVO" in reply
     assert "1 ativos" in reply
@@ -120,8 +120,8 @@ def test_status_command_reports_real_counts(monkeypatch):
 
 
 def test_status_command_is_case_insensitive():
-    assert "Orquestrador" in telegram.handle_telegram_command("STATUS")
-    assert "Orquestrador" in telegram.handle_telegram_command("  status  ")
+    assert "Orquestrador" in telegram.handle_telegram_message("STATUS")
+    assert "Orquestrador" in telegram.handle_telegram_message("  status  ")
 
 
 # --- reconhecer command -- reuses sync_escalation_status, no new ack logic ---------
@@ -129,7 +129,7 @@ def test_status_command_is_case_insensitive():
 def test_reconhecer_command_acknowledges_event_and_escalation():
     event_id, escalation_id = _seed_event_and_escalation("telegram-ack-system")
 
-    reply = telegram.handle_telegram_command(f"reconhecer {escalation_id}")
+    reply = telegram.handle_telegram_message(f"reconhecer {escalation_id}")
 
     assert str(escalation_id) in reply
     assert str(event_id) in reply
@@ -143,17 +143,147 @@ def test_reconhecer_command_acknowledges_event_and_escalation():
 
 
 def test_reconhecer_command_unknown_id_does_not_raise():
-    reply = telegram.handle_telegram_command("reconhecer 999999")
+    reply = telegram.handle_telegram_message("reconhecer 999999")
     assert "não encontrado" in reply
 
 
 def test_reconhecer_command_missing_id_returns_usage():
-    reply = telegram.handle_telegram_command("reconhecer")
+    reply = telegram.handle_telegram_message("reconhecer")
     assert "Uso" in reply
 
 
-def test_unknown_command_returns_help_text():
-    reply = telegram.handle_telegram_command("qualquer coisa aleatória")
+def test_unknown_command_returns_help_text(monkeypatch):
+    # Deterministic regardless of the real shell environment: forces the "couldn't
+    # classify" path rather than relying on ANTHROPIC_API_KEY happening to be unset.
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: None)
+    reply = telegram.handle_telegram_message("qualquer coisa aleatória")
+    assert "status" in reply
+    assert "reconhecer" in reply
+
+
+# --- classify_telegram_request seam ------------------------------------------------
+
+def test_classify_without_anthropic_api_key_returns_none(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert telegram.classify_telegram_request("força uma varredura") is None
+
+
+# --- natural-language dispatch: sweep_now -------------------------------------------
+
+def test_sweep_now_intent_triggers_real_sweep_function(monkeypatch):
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: {
+        "intent": "sweep_now", "target_system": "", "schedule_description_pt": "", "schedule_time_of_day": "", "schedule_interval_hours": 0,
+    })
+    calls = []
+    import app.agents.production_monitor_router as production_monitor_router
+    monkeypatch.setattr(production_monitor_router, "trigger_sweep", lambda: calls.append(True) or {"triggered": True})
+
+    reply = telegram.handle_telegram_message("força uma varredura agora")
+
+    assert calls == [True]
+    assert "disparada" in reply
+
+
+def test_sweep_now_intent_reports_real_failure_reason(monkeypatch):
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: {
+        "intent": "sweep_now", "target_system": "", "schedule_description_pt": "", "schedule_time_of_day": "", "schedule_interval_hours": 0,
+    })
+    import app.agents.production_monitor_router as production_monitor_router
+    monkeypatch.setattr(production_monitor_router, "trigger_sweep", lambda: {"triggered": False, "reason": "RAILWAY_TOKEN not configured"})
+
+    reply = telegram.handle_telegram_message("força uma varredura agora")
+
+    assert "RAILWAY_TOKEN not configured" in reply
+
+
+# --- natural-language dispatch: investigate_now -------------------------------------
+
+def test_investigate_now_intent_triggers_manual_investigation(monkeypatch):
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: {
+        "intent": "investigate_now", "target_system": "solar-park-test", "schedule_description_pt": "", "schedule_time_of_day": "", "schedule_interval_hours": 0,
+    })
+
+    reply = telegram.handle_telegram_message("investiga o solar-park-test")
+
+    assert "solar-park-test" in reply
+    with session_scope() as session:
+        event = session.scalar(select(EventRecord).where(EventRecord.system_id == "solar-park-test").order_by(EventRecord.id.desc()))
+        assert event is not None
+        assert event.event_type == "manual_investigation_request"
+
+
+def test_investigate_now_intent_without_target_asks_for_one(monkeypatch):
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: {
+        "intent": "investigate_now", "target_system": "", "schedule_description_pt": "", "schedule_time_of_day": "", "schedule_interval_hours": 0,
+    })
+
+    reply = telegram.handle_telegram_message("investiga isso")
+
+    assert "sistema" in reply.lower()
+
+
+# --- natural-language dispatch: scheduling, 2-message confirmation -----------------
+
+def test_schedule_request_proposes_interpretation_and_waits_for_confirmation(monkeypatch):
+    telegram._pending_schedule = None
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: {
+        "intent": "schedule_sweep", "target_system": "", "schedule_description_pt": "varredura todos os dias às 09:00",
+        "schedule_time_of_day": "09:00", "schedule_interval_hours": 0,
+    })
+
+    reply = telegram.handle_telegram_message("faz uma varredura todos os dias às 9h")
+
+    assert "09:00" in reply
+    assert "sim" in reply.lower()
+    assert telegram._pending_schedule == {"action": "sweep", "target": None, "time_of_day": "09:00", "interval_hours": None}
+
+
+def test_schedule_confirmation_saves_row_and_clears_pending_state(monkeypatch):
+    telegram._pending_schedule = {"action": "sweep", "target": None, "time_of_day": "09:00", "interval_hours": None}
+
+    reply = telegram.handle_telegram_message("sim")
+
+    assert "guardado" in reply.lower()
+    assert telegram._pending_schedule is None
+    with session_scope() as session:
+        row = session.scalar(select(TelegramScheduleRecord).order_by(TelegramScheduleRecord.id.desc()))
+        assert row.action == "sweep"
+        assert row.time_of_day == "09:00"
+        assert row.active is True
+
+
+def test_schedule_request_for_investigation_without_target_is_rejected(monkeypatch):
+    telegram._pending_schedule = None
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: {
+        "intent": "schedule_investigate", "target_system": "", "schedule_description_pt": "investigação diária",
+        "schedule_time_of_day": "09:00", "schedule_interval_hours": 0,
+    })
+
+    reply = telegram.handle_telegram_message("investiga todos os dias às 9h")
+
+    assert "sistema" in reply.lower()
+    assert telegram._pending_schedule is None
+
+
+def test_non_confirmation_reply_cancels_pending_schedule_and_reclassifies(monkeypatch):
+    telegram._pending_schedule = {"action": "sweep", "target": None, "time_of_day": "09:00", "interval_hours": None}
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: None)
+
+    reply = telegram.handle_telegram_message("na verdade esquece isso")
+
+    assert telegram._pending_schedule is None
+    assert "status" in reply  # fell through to the help text, not silently dropped
+
+
+# --- out-of-scope requests are refused, never invented ------------------------------
+
+def test_out_of_scope_request_is_refused_not_interpreted(monkeypatch):
+    monkeypatch.setattr(telegram, "classify_telegram_request", lambda text: {
+        "intent": "unknown", "target_system": "", "schedule_description_pt": "", "schedule_time_of_day": "", "schedule_interval_hours": 0,
+    })
+
+    reply = telegram.handle_telegram_message("apaga a base de dados")
+
     assert "status" in reply
     assert "reconhecer" in reply
 
