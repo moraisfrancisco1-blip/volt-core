@@ -5,9 +5,9 @@ from sqlalchemy import select
 
 from app import escalations as escalations_module
 from app.db import session_scope
-from app.escalations import MAX_CALL_ATTEMPTS, process_overdue_escalations, trigger_manual_investigation
+from app.escalations import MAX_CALL_ATTEMPTS, _retry_or_escalate, process_overdue_escalations, trigger_manual_investigation
 from app.main import app
-from app.models import EscalationRecord, EventRecord, VoiceCallRecord
+from app.models import AgentInboxRecord, EscalationRecord, EventRecord, VoiceCallRecord
 
 
 def _bootstrap(monkeypatch):
@@ -30,6 +30,32 @@ def _latest_call_sid(event_id: int) -> str:
             select(VoiceCallRecord).where(VoiceCallRecord.event_id == event_id).order_by(VoiceCallRecord.id.desc())
         )
         return call.call_sid
+
+
+def _seed_event_and_escalation(system_id: str, *, priority: str, action: str, call_attempts: int) -> tuple[int, int]:
+    with session_scope() as session:
+        event = EventRecord(
+            system=system_id, system_id=system_id, system_name=system_id, environment="production",
+            level="HIGH", severity="high", priority=priority, recommended_action=action,
+            message="Retry/escalate probe", status="active",
+        )
+        session.add(event)
+        session.flush()
+        escalation = EscalationRecord(event_id=event.id, system=system_id, priority=priority, action=action, status="calling", call_attempts=call_attempts)
+        session.add(escalation)
+        session.flush()
+        return event.id, escalation.id
+
+
+def _inbox_rows_for_event(event_id: int) -> list[AgentInboxRecord]:
+    with session_scope() as session:
+        rows = session.scalars(
+            select(AgentInboxRecord).where(AgentInboxRecord.recipient == "volt", AgentInboxRecord.message_type == "voice_call_failure")
+        ).all()
+        matching = [row for row in rows if (row.payload or {}).get("event_id") == event_id]
+        for row in matching:
+            session.expunge(row)
+        return matching
 
 
 def test_event_is_automatically_queued_for_escalation(monkeypatch):
@@ -305,8 +331,8 @@ def test_voice_status_callback_accepts_valid_twilio_signature(monkeypatch):
 def test_failed_call_enqueues_exactly_one_investigation(monkeypatch):
     headers = _bootstrap(monkeypatch)
     _enable_mock_calling(monkeypatch)
-    enqueued = []
-    monkeypatch.setattr(escalations_module, "enqueue_investigation", lambda **kwargs: enqueued.append(kwargs))
+    posted = []
+    monkeypatch.setattr(escalations_module, "post_message", lambda session, **kwargs: posted.append(kwargs))
 
     with TestClient(app) as client:
         response = client.post(
@@ -325,14 +351,57 @@ def test_failed_call_enqueues_exactly_one_investigation(monkeypatch):
         # First failure: investigate.
         response = client.post("/api/voice/status", data={"CallSid": first_sid, "CallStatus": "no-answer"})
         assert response.status_code == 200
-        assert len(enqueued) == 1
-        assert enqueued[0]["event_id"] == event_id
+        assert len(posted) == 1
+        assert posted[0]["recipient"] == "volt"
+        assert posted[0]["payload"]["event_id"] == event_id
 
         # Retry at the same priority failing again: no second investigation.
         second_sid = _latest_call_sid(event_id)
         response = client.post("/api/voice/status", data={"CallSid": second_sid, "CallStatus": "no-answer"})
         assert response.status_code == 200
-        assert len(enqueued) == 1
+        assert len(posted) == 1
+
+
+# --- _retry_or_escalate -- when does a failed/unconfirmed call hand off to Volt's inbox ---
+
+def test_p4_escalation_never_posts_to_volt_inbox():
+    event_id, escalation_id = _seed_event_and_escalation("escalations-p4", priority="P4", action="digest", call_attempts=0)
+
+    with session_scope() as session:
+        session_event = session.get(EventRecord, event_id)
+        session_escalation = session.get(EscalationRecord, escalation_id)
+        _retry_or_escalate(session, session_event, session_escalation)
+
+    assert _inbox_rows_for_event(event_id) == []
+
+
+def test_second_failure_at_same_priority_does_not_post_again():
+    # call_attempts=2 means this is a retry after an already-investigated first failure.
+    event_id, escalation_id = _seed_event_and_escalation("escalations-retry", priority="P2", action="call", call_attempts=2)
+
+    with session_scope() as session:
+        session_event = session.get(EventRecord, event_id)
+        session_escalation = session.get(EscalationRecord, escalation_id)
+        _retry_or_escalate(session, session_event, session_escalation)
+
+    assert _inbox_rows_for_event(event_id) == []
+
+
+def test_first_failure_at_p1_p2_or_p3_posts_exactly_once_to_volt_inbox():
+    event_id, escalation_id = _seed_event_and_escalation("escalations-first-failure", priority="P3", action="call", call_attempts=1)
+
+    with session_scope() as session:
+        session_event = session.get(EventRecord, event_id)
+        session_escalation = session.get(EscalationRecord, escalation_id)
+        _retry_or_escalate(session, session_event, session_escalation)
+
+    rows = _inbox_rows_for_event(event_id)
+    assert len(rows) == 1
+    assert rows[0].sender == "escalations"
+    assert rows[0].recipient == "volt"
+    assert rows[0].message_type == "voice_call_failure"
+    assert rows[0].payload["escalation_id"] == escalation_id
+    assert rows[0].status == "pending"
 
 
 # --- trigger_manual_investigation -- never a real event/call, only an investigation ---
@@ -340,7 +409,7 @@ def test_failed_call_enqueues_exactly_one_investigation(monkeypatch):
 def test_trigger_manual_investigation_never_calls_dispatch_voice_call(monkeypatch):
     calls = []
     monkeypatch.setattr(escalations_module, "dispatch_voice_call", lambda *a, **k: calls.append(True))
-    monkeypatch.setattr(escalations_module, "enqueue_investigation", lambda **kwargs: None)
+    monkeypatch.setattr(escalations_module, "post_message", lambda session, **kwargs: None)
 
     with session_scope() as session:
         trigger_manual_investigation(session, "manual-trigger-system")
@@ -349,17 +418,19 @@ def test_trigger_manual_investigation_never_calls_dispatch_voice_call(monkeypatc
 
 
 def test_trigger_manual_investigation_enqueues_a_real_investigation(monkeypatch):
-    enqueued = []
-    monkeypatch.setattr(escalations_module, "enqueue_investigation", lambda **kwargs: enqueued.append(kwargs))
+    posted = []
+    monkeypatch.setattr(escalations_module, "post_message", lambda session, **kwargs: posted.append(kwargs))
 
     with session_scope() as session:
         event, escalation = trigger_manual_investigation(session, "manual-trigger-system-2")
         event_id, escalation_id = event.id, escalation.id
 
-    assert len(enqueued) == 1
-    assert enqueued[0]["event_id"] == event_id
-    assert enqueued[0]["escalation_id"] == escalation_id
-    assert enqueued[0]["system"] == "manual-trigger-system-2"
+    assert len(posted) == 1
+    assert posted[0]["recipient"] == "volt"
+    assert posted[0]["message_type"] == "voice_call_failure"
+    assert posted[0]["payload"]["event_id"] == event_id
+    assert posted[0]["payload"]["escalation_id"] == escalation_id
+    assert posted[0]["payload"]["system"] == "manual-trigger-system-2"
     with session_scope() as session:
         event_row = session.get(EventRecord, event_id)
         escalation_row = session.get(EscalationRecord, escalation_id)

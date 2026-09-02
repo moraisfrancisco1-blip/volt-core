@@ -7,7 +7,7 @@ from sqlalchemy import select
 from .voice import get_voice_provider, build_voice_script
 from .approvals import ApprovalDecision
 from .action_gate import ActionEnvironment, ActionStatus, evaluate_action
-from .agents.dispatcher import start_investigation_worker
+from .agents.agent_inbox import start_agent_inbox_worker
 from .agents.production_monitor import start_production_monitor
 from .agents.telegram_scheduler import start_telegram_scheduler
 from .agents.production_monitor_router import router as monitoring_sweeps_router
@@ -34,7 +34,7 @@ voice_provider = get_voice_provider()
 
 @app.on_event("startup")
 def startup() -> None:
-    bootstrap_admin(); start_monitoring(); run_controlled_self_test(); start_investigation_worker(); start_production_monitor(); start_telegram_scheduler()
+    bootstrap_admin(); start_monitoring(); run_controlled_self_test(); start_agent_inbox_worker(); start_production_monitor(); start_telegram_scheduler()
 
 class Priority(str, Enum): P1 = "P1"; P2 = "P2"; P3 = "P3"; P4 = "P4"
 LEVEL_PRIORITY = {"CRITICAL": Priority.P1, "ERROR": Priority.P2, "WARNING": Priority.P3, "INFO": Priority.P4}

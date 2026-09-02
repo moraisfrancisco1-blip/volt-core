@@ -55,7 +55,7 @@ def trigger_sweep() -> dict:
     # Fires the same run_sweep() the periodic thread already calls on its own
     # schedule -- this just runs it now instead of waiting. Never blocks the
     # request: run_sweep() makes real LLM API calls per mapped system, same
-    # "never block the caller" discipline as dispatcher.py's worker thread.
+    # "never block the caller" discipline as agent_inbox.py's worker thread.
     if not (llm_client.is_configured() and os.getenv("RAILWAY_TOKEN")):
         return {"triggered": False, "reason": "LLM provider (ANTHROPIC_API_KEY/DEEPSEEK_API_KEY/OPENAI_API_KEY) or RAILWAY_TOKEN not configured"}
     threading.Thread(target=production_monitor.run_sweep, daemon=True).start()

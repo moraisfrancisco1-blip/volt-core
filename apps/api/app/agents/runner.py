@@ -137,7 +137,7 @@ def _maybe_chain_to_code_diagnosis(job: InvestigationJob, *, parent_investigatio
     # equivalent call -- there is no structural path from a completed code_diagnosis
     # investigation back into this function. Do not "fix" that by adding chaining there.
     try:
-        from .dispatcher import enqueue_code_diagnosis
+        from .agent_inbox import post_message
         from .repo_config import resolve_repo
 
         mapping = resolve_repo(job.system)
@@ -152,15 +152,14 @@ def _maybe_chain_to_code_diagnosis(job: InvestigationJob, *, parent_investigatio
                 )
             return
         owner, repo = mapping
-        enqueue_code_diagnosis(
-            event_id=job.event_id,
-            escalation_id=job.escalation_id,
-            system=job.system,
-            environment=job.environment,
-            priority=job.priority,
-            owner=owner,
-            repo=repo,
-            parent_investigation_id=parent_investigation_id,
+        post_message(
+            sender="volt", recipient="dev_debug", message_type="code_diagnosis",
+            payload={
+                "event_id": job.event_id, "escalation_id": job.escalation_id, "system": job.system,
+                "environment": job.environment, "priority": job.priority, "owner": owner, "repo": repo,
+                "parent_investigation_id": parent_investigation_id,
+            },
+            content=f"@dev_debug investigate code for {job.system} (parent investigation #{parent_investigation_id})",
         )
     except Exception as exc:
         with session_scope() as session:
@@ -171,15 +170,15 @@ def _maybe_chain_to_database_diagnosis(job: InvestigationJob, *, parent_investig
     # Unlike Dev/Debug, there's no mapping to resolve -- the target is always VOLT
     # CORE's own Postgres. Fires unconditionally, no skip condition.
     try:
-        from .dispatcher import enqueue_database_diagnosis
+        from .agent_inbox import post_message
 
-        enqueue_database_diagnosis(
-            event_id=job.event_id,
-            escalation_id=job.escalation_id,
-            system=job.system,
-            environment=job.environment,
-            priority=job.priority,
-            parent_investigation_id=parent_investigation_id,
+        post_message(
+            sender="volt", recipient="database", message_type="database_diagnosis",
+            payload={
+                "event_id": job.event_id, "escalation_id": job.escalation_id, "system": job.system,
+                "environment": job.environment, "priority": job.priority, "parent_investigation_id": parent_investigation_id,
+            },
+            content=f"@database investigate database activity for {job.system} (parent investigation #{parent_investigation_id})",
         )
     except Exception as exc:
         with session_scope() as session:
@@ -190,7 +189,7 @@ def _maybe_chain_to_finance_diagnosis(job: InvestigationJob, *, parent_investiga
     # Like Dev/Debug (not like the Database Agent): there's a per-system mapping to
     # resolve, and without it this skips with an audit record, it doesn't fail.
     try:
-        from .dispatcher import enqueue_finance_diagnosis
+        from .agent_inbox import post_message
         from .stripe_config import resolve_stripe_key_env_var
 
         env_var = resolve_stripe_key_env_var(job.system)
@@ -204,14 +203,14 @@ def _maybe_chain_to_finance_diagnosis(job: InvestigationJob, *, parent_investiga
                     )
                 )
             return
-        enqueue_finance_diagnosis(
-            event_id=job.event_id,
-            escalation_id=job.escalation_id,
-            system=job.system,
-            environment=job.environment,
-            priority=job.priority,
-            stripe_key_env_var=env_var,
-            parent_investigation_id=parent_investigation_id,
+        post_message(
+            sender="volt", recipient="finance", message_type="finance_diagnosis",
+            payload={
+                "event_id": job.event_id, "escalation_id": job.escalation_id, "system": job.system,
+                "environment": job.environment, "priority": job.priority, "stripe_key_env_var": env_var,
+                "parent_investigation_id": parent_investigation_id,
+            },
+            content=f"@finance investigate Stripe activity for {job.system} (parent investigation #{parent_investigation_id})",
         )
     except Exception as exc:
         with session_scope() as session:
