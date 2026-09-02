@@ -1,6 +1,7 @@
 import queue
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 from app.agents import dispatcher, repo_config, runner, stripe_config
@@ -12,22 +13,26 @@ from app.db import session_scope
 from app.models import AgentInvestigationRecord, AuditRecord, EventRecord
 
 
-class FakeToolUseBlock:
-    def __init__(self, name, input, id="toolu_1"):
-        self.type = "tool_use"
-        self.name = name
-        self.input = input
-        self.id = id
+@pytest.fixture(autouse=True)
+def _default_provider_key(monkeypatch):
+    # _call_model is always monkeypatched in this file's tests, so the real client is
+    # never used -- but run_investigation() still calls llm_client.get_client() first,
+    # which would raise LLMConfigError with no provider configured at all. A fake
+    # Anthropic key keeps that harmless, matching anthropic.Anthropic()'s old
+    # lazy-validation behavior these tests already relied on.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-key-not-real")
 
 
-class FakeTextBlock:
-    def __init__(self, text):
-        self.type = "text"
-        self.text = text
+def _tool_use(name, input, id="toolu_1"):
+    return {"type": "tool_use", "name": name, "input": input, "id": id}
+
+
+def _text(text):
+    return {"type": "text", "text": text}
 
 
 def _fake_message(content, stop_reason, input_tokens=111, output_tokens=22):
-    return SimpleNamespace(content=content, stop_reason=stop_reason, usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens))
+    return SimpleNamespace(content=content, stop_reason=stop_reason, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 def _seed_event(system_id: str) -> int:
@@ -54,9 +59,9 @@ def test_run_investigation_success_after_one_tool_call(monkeypatch):
     job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-success-system", environment="production", priority="P2")
 
     responses = [
-        _fake_message([FakeToolUseBlock("get_incident_event", {})], "tool_use"),
+        _fake_message([_tool_use("get_incident_event", {})], "tool_use"),
         _fake_message(
-            [FakeToolUseBlock("submit_investigation_result", {
+            [_tool_use("submit_investigation_result", {
                 "hypothesis": "The system looks fine, likely a one-off missed call.",
                 "recommended_next_step": "Check with the on-call operator manually.",
                 "confidence": 0.6,
@@ -92,7 +97,7 @@ def test_run_investigation_no_tool_use_is_recorded_as_failed(monkeypatch):
     job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-no-tool-use-system", environment="production", priority="P2")
 
     def fake_call_model(client, messages):
-        return _fake_message([FakeTextBlock("I don't know what to do.")], "end_turn")
+        return _fake_message([_text("I don't know what to do.")], "end_turn")
 
     monkeypatch.setattr(runner, "_call_model", fake_call_model)
 
@@ -126,7 +131,7 @@ def test_run_investigation_exceeds_max_turns_is_recorded_as_failed(monkeypatch):
 
     def fake_call_model(client, messages):
         # Always asks for another (harmless, unknown) tool -- never submits a result.
-        return _fake_message([FakeToolUseBlock("get_incident_event", {})], "tool_use")
+        return _fake_message([_tool_use("get_incident_event", {})], "tool_use")
 
     monkeypatch.setattr(runner, "_call_model", fake_call_model)
 
@@ -139,7 +144,7 @@ def test_run_investigation_exceeds_max_turns_is_recorded_as_failed(monkeypatch):
 
 def _submit_response(is_known_pattern: bool):
     return _fake_message(
-        [FakeToolUseBlock("submit_investigation_result", {
+        [_tool_use("submit_investigation_result", {
             "hypothesis": "probe hypothesis", "recommended_next_step": "probe next step",
             "confidence": 0.5, "is_known_pattern": is_known_pattern,
         })],
