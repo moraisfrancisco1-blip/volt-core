@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from .agents.dispatcher import enqueue_investigation
+from .agents.agent_inbox import post_message
 from .auth import Principal, authenticate, require_scope
 from .db import session_scope
 from .models import AuditRecord, EscalationRecord, EventRecord, VoiceCallRecord
@@ -49,7 +49,7 @@ def trigger_manual_investigation(session, system_id: str, environment: str = "pr
     # Never goes through create_event/decide_event/dispatch_voice_call -- this isn't a
     # real incident, it must never place a real Twilio call or duplicate the Telegram
     # notification create_event already sends for genuine events. Builds the minimal
-    # EventRecord/EscalationRecord enqueue_investigation needs directly instead.
+    # EventRecord/EscalationRecord Volt's inbox message needs directly instead.
     record = EventRecord(
         system=system_id, system_id=system_id, system_name=system_id, environment=environment,
         level="INFO", severity="info", priority="P3", event_type="manual_investigation_request",
@@ -60,7 +60,12 @@ def trigger_manual_investigation(session, system_id: str, environment: str = "pr
     session.add(record); session.flush()
     escalation = queue_escalation(session, record)
     escalation.status = "completed"  # not a real SLA-bound escalation -- must never show as overdue
-    enqueue_investigation(event_id=record.id, escalation_id=escalation.id, system=system_id, environment=environment, priority=record.priority)
+    post_message(
+        session,
+        sender="escalations", recipient="volt", message_type="voice_call_failure",
+        payload={"event_id": record.id, "escalation_id": escalation.id, "system": system_id, "environment": environment, "priority": record.priority},
+        content=f"@volt investigate {system_id} ({environment}) — manual investigation requested via Telegram",
+    )
     return record, escalation
 
 def should_auto_call(event: EventRecord) -> bool:
@@ -98,7 +103,12 @@ def _retry_or_escalate(session, event: EventRecord, escalation: EscalationRecord
     # that never called anyone): hand it to Volt for a read-only investigation. This
     # never touches escalation/event state and can never fail this function.
     if escalation.action == "call" and escalation.call_attempts == 1:
-        enqueue_investigation(event_id=event.id, escalation_id=escalation.id, system=event.system, environment=event.environment, priority=escalation.priority)
+        post_message(
+            session,
+            sender="escalations", recipient="volt", message_type="voice_call_failure",
+            payload={"event_id": event.id, "escalation_id": escalation.id, "system": event.system, "environment": event.environment, "priority": escalation.priority},
+            content=f"@volt investigate {event.system} ({event.environment}) — {escalation.priority} call unconfirmed",
+        )
     escalate = escalation.action != "call" or escalation.call_attempts >= MAX_CALL_ATTEMPTS
     if escalate:
         old_priority = escalation.priority; new_priority = NEXT_PRIORITY.get(old_priority, old_priority)

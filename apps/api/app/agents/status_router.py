@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from ..db import session_scope
 from ..models import AgentInvestigationRecord, MonitoringSweepRecord
-from . import dispatcher, production_monitor
+from . import agent_inbox, production_monitor
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -24,7 +24,7 @@ def _iso(value: datetime | None) -> str | None:
 
 @router.get("/agents/status")
 def agents_status() -> list[dict]:
-    current = dispatcher.current_job_type()
+    current = agent_inbox.current_message_type()
     with session_scope() as session:
         results = []
         for agent_id, investigation_type in _INVESTIGATION_AGENTS:

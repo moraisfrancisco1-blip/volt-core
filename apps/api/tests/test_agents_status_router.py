@@ -1,4 +1,4 @@
-from app.agents import dispatcher, production_monitor
+from app.agents import agent_inbox, production_monitor
 from app.agents.status_router import agents_status
 from app.db import session_scope
 from app.models import AgentInvestigationRecord, MonitoringSweepRecord
@@ -18,7 +18,7 @@ def _seed_sweep(status: str, system: str) -> None:
 
 
 def test_agents_status_returns_all_five_agents_with_valid_states(monkeypatch):
-    monkeypatch.setattr(dispatcher, "_current_job_type", None)
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
     monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
 
     results = {row["agent"]: row for row in agents_status()}
@@ -33,7 +33,7 @@ def test_agents_status_returns_all_five_agents_with_valid_states(monkeypatch):
 
 
 def test_latest_failed_investigation_reports_error(monkeypatch):
-    monkeypatch.setattr(dispatcher, "_current_job_type", None)
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
     monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
     _seed_investigation("code_diagnosis", "failed", "status-router-dev-debug-error")
 
@@ -45,7 +45,7 @@ def test_latest_failed_investigation_reports_error(monkeypatch):
 
 
 def test_latest_completed_investigation_after_a_failure_reports_idle(monkeypatch):
-    monkeypatch.setattr(dispatcher, "_current_job_type", None)
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
     monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
     _seed_investigation("database_diagnosis", "failed", "status-router-db-idle")
     _seed_investigation("database_diagnosis", "completed", "status-router-db-idle")
@@ -58,7 +58,7 @@ def test_latest_completed_investigation_after_a_failure_reports_idle(monkeypatch
 
 
 def test_current_job_type_reports_working(monkeypatch):
-    monkeypatch.setattr(dispatcher, "_current_job_type", "finance_diagnosis")
+    monkeypatch.setattr(agent_inbox, "_current_message_type", "finance_diagnosis")
     monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
 
     results = {row["agent"]: row for row in agents_status()}
@@ -67,7 +67,7 @@ def test_current_job_type_reports_working(monkeypatch):
 
 
 def test_sweep_in_progress_reports_production_monitor_working(monkeypatch):
-    monkeypatch.setattr(dispatcher, "_current_job_type", None)
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
     monkeypatch.setattr(production_monitor, "_sweep_in_progress", True)
 
     results = {row["agent"]: row for row in agents_status()}
@@ -76,7 +76,7 @@ def test_sweep_in_progress_reports_production_monitor_working(monkeypatch):
 
 
 def test_latest_failed_sweep_reports_error_when_not_in_progress(monkeypatch):
-    monkeypatch.setattr(dispatcher, "_current_job_type", None)
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
     monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
     _seed_sweep("failed", "status-router-sweep-error")
 
