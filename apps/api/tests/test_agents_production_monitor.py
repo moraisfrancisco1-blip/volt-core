@@ -33,6 +33,16 @@ def _fake_message(content, stop_reason, input_tokens=55, output_tokens=11):
     return SimpleNamespace(content=content, stop_reason=stop_reason, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
+def test_call_tool_handler_drops_arguments_the_handler_does_not_accept():
+    def get_service_http_metrics(job):
+        return {"job_system": job.system}
+
+    job = ProductionSweepJob(system="s", environment="production", project_id="p1", service_id="s1", environment_id="e1")
+    result = production_monitor._call_tool_handler(get_service_http_metrics, job, {"limit": 20})
+
+    assert result == {"job_system": "s"}
+
+
 def _job(system: str) -> ProductionSweepJob:
     return ProductionSweepJob(system=system, environment="production", project_id="p1", service_id="s1", environment_id="e1")
 

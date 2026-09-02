@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from datetime import datetime, timezone
@@ -38,6 +39,17 @@ def _build_prompt(job: InvestigationJob) -> str:
     )
 
 
+def _call_tool_handler(handler: Any, job: InvestigationJob, raw_input: dict[str, Any]) -> dict:
+    # The model can call a tool with an argument beyond what its own schema declares --
+    # seen in production: DeepSeek called get_incident_event (no parameters in its
+    # schema) with an unsolicited "limit", crashing the whole investigation with a
+    # TypeError instead of just that one tool call. Drop anything the handler doesn't
+    # actually accept rather than letting a malformed call abort the investigation.
+    accepted = set(inspect.signature(handler).parameters) - {"job"}
+    filtered = {key: value for key, value in raw_input.items() if key in accepted}
+    return handler(job, **filtered)
+
+
 def _call_model(client: llm_client.LLMClient, messages: list[dict[str, Any]]) -> Any:
     # The single seam tests substitute -- never touches the network once monkeypatched.
     return client.call(
@@ -72,7 +84,7 @@ def run_investigation(job: InvestigationJob) -> None:
                     submitted = block["input"]
                     continue
                 handler = TOOL_HANDLERS.get(block["name"])
-                result = handler(job, **block["input"]) if handler else {"error": f"unknown tool {block['name']}"}
+                result = _call_tool_handler(handler, job, block["input"]) if handler else {"error": f"unknown tool {block['name']}"}
                 tool_results.append({"type": "tool_result", "tool_use_id": block["id"], "content": json.dumps(result)})
 
             if submitted is not None:

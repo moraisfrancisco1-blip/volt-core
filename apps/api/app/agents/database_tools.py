@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable
 
 import httpx
@@ -67,6 +68,13 @@ _QUERIES: dict[str, str] = {
 }
 
 
+def _json_safe(value: Any) -> Any:
+    # Postgres timestamp columns (e.g. table_health's last_vacuum/last_analyze) come
+    # back from SQLAlchemy as raw datetime objects, which json.dumps can't serialize --
+    # every row this seam returns eventually gets json.dumps'd as a tool_result.
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
 def _run_diagnostic_query(query_name: str, params: dict) -> dict:
     # The single seam tests substitute -- never touches the real database once
     # monkeypatched. A missing extension (e.g. pg_stat_statements) surfaces here as a
@@ -74,7 +82,7 @@ def _run_diagnostic_query(query_name: str, params: dict) -> dict:
     try:
         with session_scope() as session:
             rows = session.execute(text(_QUERIES[query_name]), params).mappings().all()
-            return {"rows": [dict(row) for row in rows]}
+            return {"rows": [{key: _json_safe(value) for key, value in row.items()} for row in rows]}
     except SQLAlchemyError as exc:
         return {"error": str(exc)[:500]}
 

@@ -1,9 +1,55 @@
+import json
+from datetime import datetime, timezone
+
 from app.agents import database_tools
 from app.agents.database_tools import DatabaseJob
 
 
 def _job() -> DatabaseJob:
     return DatabaseJob(event_id=1, escalation_id=2, system="volt-core", environment="production", priority="P2", parent_investigation_id=9)
+
+
+def test_json_safe_converts_datetime_to_isoformat():
+    now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    assert database_tools._json_safe(now) == now.isoformat()
+
+
+def test_json_safe_passes_through_non_datetime_values():
+    assert database_tools._json_safe(42) == 42
+    assert database_tools._json_safe("text") == "text"
+    assert database_tools._json_safe(None) is None
+
+
+def test_run_diagnostic_query_converts_datetime_columns_so_the_result_is_json_serializable(monkeypatch):
+    # table_health's real query returns last_vacuum/last_autovacuum/etc as raw Postgres
+    # timestamps -- SQLAlchemy hands these back as datetime objects, which used to crash
+    # json.dumps() once the tool_result was serialized (production investigation #2).
+    last_vacuum = datetime(2026, 9, 1, 3, 0, tzinfo=timezone.utc)
+
+    class _FakeMappingResult:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [{"relname": "events", "n_dead_tup": 50, "last_vacuum": last_vacuum}]
+
+    class _FakeSession:
+        def execute(self, statement, params):
+            return _FakeMappingResult()
+
+    class _FakeSessionScope:
+        def __enter__(self):
+            return _FakeSession()
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(database_tools, "session_scope", lambda: _FakeSessionScope())
+
+    result = database_tools._run_diagnostic_query("table_health", {"limit": 20})
+
+    assert result["rows"][0]["last_vacuum"] == last_vacuum.isoformat()
+    json.dumps(result)  # must not raise
 
 
 def test_get_running_queries_success(monkeypatch):
