@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 from app.agents import production_monitor, railway_tools
@@ -8,22 +9,28 @@ from app.db import session_scope
 from app.models import EscalationRecord, EventRecord, MonitoringSweepRecord
 
 
-class FakeToolUseBlock:
-    def __init__(self, name, input, id="toolu_1"):
-        self.type = "tool_use"
-        self.name = name
-        self.input = input
-        self.id = id
+@pytest.fixture(autouse=True)
+def _default_provider_key(monkeypatch):
+    # _call_model is always monkeypatched in this file's run_system_sweep-level tests,
+    # so the real client is never used -- but run_system_sweep() still calls
+    # llm_client.get_client() first, which would raise LLMConfigError with no provider
+    # configured at all. A fake Anthropic key keeps that harmless, matching
+    # anthropic.Anthropic()'s old lazy-validation behavior these tests already relied
+    # on. The run_sweep()/start_production_monitor() gate tests below delenv this (and
+    # the other 2 provider keys) themselves to test the "not configured" path.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-key-not-real")
 
 
-class FakeTextBlock:
-    def __init__(self, text):
-        self.type = "text"
-        self.text = text
+def _tool_use(name, input, id="toolu_1"):
+    return {"type": "tool_use", "name": name, "input": input, "id": id}
+
+
+def _text(text):
+    return {"type": "text", "text": text}
 
 
 def _fake_message(content, stop_reason, input_tokens=55, output_tokens=11):
-    return SimpleNamespace(content=content, stop_reason=stop_reason, usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens))
+    return SimpleNamespace(content=content, stop_reason=stop_reason, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 def _job(system: str) -> ProductionSweepJob:
@@ -46,8 +53,8 @@ def _no_network_railway_calls(monkeypatch):
 def test_run_system_sweep_finds_nothing_creates_no_event(monkeypatch):
     _no_network_railway_calls(monkeypatch)
     responses = [
-        _fake_message([FakeToolUseBlock("get_service_http_metrics", {})], "tool_use"),
-        _fake_message([FakeToolUseBlock("submit_sweep_result", {"summary": "Nothing concerning."})], "tool_use"),
+        _fake_message([_tool_use("get_service_http_metrics", {})], "tool_use"),
+        _fake_message([_tool_use("submit_sweep_result", {"summary": "Nothing concerning."})], "tool_use"),
     ]
     calls = []
 
@@ -70,11 +77,11 @@ def test_run_system_sweep_finds_nothing_creates_no_event(monkeypatch):
 def test_run_system_sweep_raises_alert_creates_event(monkeypatch):
     _no_network_railway_calls(monkeypatch)
     responses = [
-        _fake_message([FakeToolUseBlock("get_service_http_metrics", {})], "tool_use"),
-        _fake_message([FakeToolUseBlock("raise_monitoring_alert", {
+        _fake_message([_tool_use("get_service_http_metrics", {})], "tool_use"),
+        _fake_message([_tool_use("raise_monitoring_alert", {
             "severity": "high", "category": "error_rate", "title": "Elevated errors", "message": "5xx rate sustained at 15% over 6h",
         })], "tool_use"),
-        _fake_message([FakeToolUseBlock("submit_sweep_result", {"summary": "Raised an alert for elevated error rate."})], "tool_use"),
+        _fake_message([_tool_use("submit_sweep_result", {"summary": "Raised an alert for elevated error rate."})], "tool_use"),
     ]
     calls = []
 
@@ -106,10 +113,10 @@ def test_run_system_sweep_deduped_alert_is_recorded_as_deduped(monkeypatch):
     raise_monitoring_alert(_job("prodmon-already-open"), severity="medium", category="latency", title="Slow", message="already open")
 
     responses = [
-        _fake_message([FakeToolUseBlock("raise_monitoring_alert", {
+        _fake_message([_tool_use("raise_monitoring_alert", {
             "severity": "medium", "category": "latency", "title": "Still slow", "message": "still elevated",
         })], "tool_use"),
-        _fake_message([FakeToolUseBlock("submit_sweep_result", {"summary": "Already alerted, still ongoing."})], "tool_use"),
+        _fake_message([_tool_use("submit_sweep_result", {"summary": "Already alerted, still ongoing."})], "tool_use"),
     ]
     calls = []
 
@@ -126,7 +133,7 @@ def test_run_system_sweep_deduped_alert_is_recorded_as_deduped(monkeypatch):
 
 
 def test_run_system_sweep_no_tool_use_is_recorded_as_failed(monkeypatch):
-    monkeypatch.setattr(production_monitor, "_call_model", lambda client, messages: _fake_message([FakeTextBlock("uncertain")], "end_turn"))
+    monkeypatch.setattr(production_monitor, "_call_model", lambda client, messages: _fake_message([_text("uncertain")], "end_turn"))
     production_monitor.run_system_sweep(_job("prodmon-no-tool-use"))
     sweep = _latest_sweep("prodmon-no-tool-use")
     assert sweep.status == "failed"
@@ -146,7 +153,7 @@ def test_run_system_sweep_model_exception_is_recorded_as_failed_not_raised(monke
 
 def test_run_system_sweep_exceeds_max_turns_is_recorded_as_failed(monkeypatch):
     monkeypatch.setattr(production_monitor, "MAX_TURNS", 2)
-    monkeypatch.setattr(production_monitor, "_call_model", lambda client, messages: _fake_message([FakeToolUseBlock("get_recent_deployments", {})], "tool_use"))
+    monkeypatch.setattr(production_monitor, "_call_model", lambda client, messages: _fake_message([_tool_use("get_recent_deployments", {})], "tool_use"))
     _no_network_railway_calls(monkeypatch)
 
     production_monitor.run_system_sweep(_job("prodmon-max-turns"))
@@ -158,6 +165,8 @@ def test_run_system_sweep_exceeds_max_turns_is_recorded_as_failed(monkeypatch):
 
 def test_run_sweep_without_credentials_never_calls_model(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("RAILWAY_TOKEN", "fake-token")
     monkeypatch.setenv("VOLT_SYSTEM_RAILWAY", '{"prodmon-gated-system": {"projectId": "p", "serviceId": "s", "environmentId": "e"}}')
 
@@ -205,6 +214,8 @@ def test_run_sweep_one_system_failure_does_not_abort_the_rest(monkeypatch):
 
 def test_start_production_monitor_does_nothing_without_both_credentials(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("RAILWAY_TOKEN", "fake-token")
     monkeypatch.setattr(production_monitor, "_started", False)
 

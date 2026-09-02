@@ -4,6 +4,7 @@ import os
 import queue
 import threading
 
+from .. import llm_client
 from ..db import session_scope
 from ..models import AuditRecord
 from .database_tools import DatabaseJob
@@ -117,12 +118,13 @@ def _worker_loop() -> None:
 def start_investigation_worker() -> None:
     global _started
     # Mirrors monitoring.py's start_monitoring(): only run the background worker when
-    # there's actually something for it to do. Without a key, jobs still enqueue fine
-    # (harmless, bounded by VOLT_AGENT_QUEUE_MAXSIZE) but nothing ever consumes them --
-    # this specifically keeps every existing test that exercises the escalation/voice
-    # flow (and therefore calls enqueue_investigation) from spinning up a thread that
-    # would try to construct a real Anthropic client in the background.
-    if _started or not os.getenv("ANTHROPIC_API_KEY"):
+    # there's actually something for it to do. Without a provider configured, jobs
+    # still enqueue fine (harmless, bounded by VOLT_AGENT_QUEUE_MAXSIZE) but nothing
+    # ever consumes them -- this specifically keeps every existing test that exercises
+    # the escalation/voice flow (and therefore calls enqueue_investigation) from
+    # spinning up a thread that would try to construct a real LLM client in the
+    # background.
+    if _started or not llm_client.is_configured():
         return
     with _lock:
         if _started:

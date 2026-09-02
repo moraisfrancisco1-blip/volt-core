@@ -102,6 +102,8 @@ def test_first_failure_at_p1_p2_or_p3_enqueues_exactly_once(monkeypatch):
 
 def test_start_investigation_worker_does_nothing_without_api_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(dispatcher, "_started", False)
 
     dispatcher.start_investigation_worker()

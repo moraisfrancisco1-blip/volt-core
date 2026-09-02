@@ -4,6 +4,8 @@ from app.agents.production_monitor_router import trigger_sweep
 
 def test_trigger_sweep_without_credentials_does_not_start_a_thread(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("RAILWAY_TOKEN", raising=False)
 
     def spy():

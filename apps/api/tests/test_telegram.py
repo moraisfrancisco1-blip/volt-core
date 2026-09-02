@@ -163,8 +163,11 @@ def test_unknown_command_returns_help_text(monkeypatch):
 
 # --- classify_telegram_request seam ------------------------------------------------
 
-def test_classify_without_anthropic_api_key_returns_none(monkeypatch):
+def test_classify_without_any_provider_configured_returns_none(monkeypatch):
+    monkeypatch.delenv("VOLT_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert telegram.classify_telegram_request("força uma varredura") is None
 
 

@@ -4,6 +4,7 @@ import threading
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 
+from .. import llm_client
 from ..db import session_scope
 from ..models import MonitoringSweepRecord
 from . import production_monitor
@@ -53,10 +54,10 @@ def list_monitoring_sweeps(
 def trigger_sweep() -> dict:
     # Fires the same run_sweep() the periodic thread already calls on its own
     # schedule -- this just runs it now instead of waiting. Never blocks the
-    # request: run_sweep() makes real Anthropic API calls per mapped system, same
+    # request: run_sweep() makes real LLM API calls per mapped system, same
     # "never block the caller" discipline as dispatcher.py's worker thread.
-    if not (os.getenv("ANTHROPIC_API_KEY") and os.getenv("RAILWAY_TOKEN")):
-        return {"triggered": False, "reason": "ANTHROPIC_API_KEY or RAILWAY_TOKEN not configured"}
+    if not (llm_client.is_configured() and os.getenv("RAILWAY_TOKEN")):
+        return {"triggered": False, "reason": "LLM provider (ANTHROPIC_API_KEY/DEEPSEEK_API_KEY/OPENAI_API_KEY) or RAILWAY_TOKEN not configured"}
     threading.Thread(target=production_monitor.run_sweep, daemon=True).start()
     return {"triggered": True}
 

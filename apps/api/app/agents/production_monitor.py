@@ -7,8 +7,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-import anthropic
-
+from .. import llm_client
 from ..db import session_scope
 from ..models import AuditRecord, MonitoringSweepRecord
 from .monitoring_alerts import RAISE_ALERT_SCHEMA, raise_monitoring_alert
@@ -16,7 +15,7 @@ from .railway_config import resolve_railway_service, sweep_system_ids
 from .railway_tools import TOOL_HANDLERS, TOOL_SCHEMAS, ProductionSweepJob
 
 SWEEP_INTERVAL_SECONDS = max(60, int(os.getenv("VOLT_PRODMON_INTERVAL_SECONDS", "600")))
-MODEL = os.getenv("VOLT_PRODMON_MODEL", "claude-sonnet-4-5")
+MODEL = os.getenv("VOLT_PRODMON_MODEL") or llm_client.default_model()
 MAX_TURNS = max(1, int(os.getenv("VOLT_PRODMON_MAX_TURNS", "8")))
 MAX_TOKENS = 2048
 
@@ -58,9 +57,9 @@ def _build_prompt(job: ProductionSweepJob) -> str:
     )
 
 
-def _call_model(client: anthropic.Anthropic, messages: list[dict[str, Any]]) -> Any:
+def _call_model(client: llm_client.LLMClient, messages: list[dict[str, Any]]) -> Any:
     # The single seam tests substitute -- never touches the network once monkeypatched.
-    return client.messages.create(
+    return client.call(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
@@ -70,13 +69,15 @@ def _call_model(client: anthropic.Anthropic, messages: list[dict[str, Any]]) -> 
 
 
 def run_system_sweep(job: ProductionSweepJob) -> None:
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment; never constructed at import time
     messages: list[dict[str, Any]] = [{"role": "user", "content": _build_prompt(job)}]
     # Sweep-scoped, not turn-scoped: raise_monitoring_alert and submit_sweep_result can
     # land on different turns, and the alert's outcome must survive until the submit.
     event_action = None
     created_event_id = None
     try:
+        client = llm_client.get_client()  # reads whichever provider is configured; never constructed at import
+        # time. Inside the try so a missing-provider LLMConfigError degrades to a normal
+        # _persist_failure, same as every other exception in this loop.
         for turn in range(MAX_TURNS):
             response = _call_model(client, messages)
             messages.append({"role": "assistant", "content": response.content})
@@ -88,22 +89,22 @@ def run_system_sweep(job: ProductionSweepJob) -> None:
             tool_results = []
             submitted = None
             for block in response.content:
-                if getattr(block, "type", None) != "tool_use":
+                if block.get("type") != "tool_use":
                     continue
-                if block.name == SUBMIT_TOOL_NAME:
-                    submitted = block.input
+                if block["name"] == SUBMIT_TOOL_NAME:
+                    submitted = block["input"]
                     continue
-                if block.name == "raise_monitoring_alert":
-                    result = raise_monitoring_alert(job, **block.input)
+                if block["name"] == "raise_monitoring_alert":
+                    result = raise_monitoring_alert(job, **block["input"])
                     if result.get("created"):
                         event_action = "created"
                     elif "event_id" in result:
                         event_action = "deduped"
                     created_event_id = result.get("event_id")
                 else:
-                    handler = TOOL_HANDLERS.get(block.name)
-                    result = handler(job, **block.input) if handler else {"error": f"unknown tool {block.name}"}
-                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": json.dumps(result)})
+                    handler = TOOL_HANDLERS.get(block["name"])
+                    result = handler(job, **block["input"]) if handler else {"error": f"unknown tool {block['name']}"}
+                tool_results.append({"type": "tool_result", "tool_use_id": block["id"], "content": json.dumps(result)})
 
             if submitted is not None:
                 _persist_success(job, submitted, response, event_action or "none", created_event_id, turns_used=turn + 1)
@@ -119,7 +120,6 @@ def run_system_sweep(job: ProductionSweepJob) -> None:
 
 
 def _persist_success(job: ProductionSweepJob, submitted: dict[str, Any], response: Any, event_action: str, created_event_id: int | None, turns_used: int) -> None:
-    usage = getattr(response, "usage", None)
     with session_scope() as session:
         session.add(
             MonitoringSweepRecord(
@@ -131,8 +131,8 @@ def _persist_success(job: ProductionSweepJob, submitted: dict[str, Any], respons
                 summary=str(submitted.get("summary") or ""),
                 model=MODEL,
                 turns_used=turns_used,
-                input_tokens=getattr(usage, "input_tokens", None),
-                output_tokens=getattr(usage, "output_tokens", None),
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
                 completed_at=datetime.now(timezone.utc),
             )
         )
@@ -161,7 +161,7 @@ def _persist_failure(job: ProductionSweepJob, reason: str) -> None:
 
 
 def run_sweep() -> None:
-    if not (os.getenv("ANTHROPIC_API_KEY") and os.getenv("RAILWAY_TOKEN")):
+    if not (llm_client.is_configured() and os.getenv("RAILWAY_TOKEN")):
         return
     for system in sweep_system_ids():
         target = resolve_railway_service(system)
@@ -201,10 +201,11 @@ def _sweep_loop() -> None:
 def start_production_monitor() -> None:
     global _started
     # Double-gated, combining both existing precedents: this guards thread startup
-    # (mirrors start_investigation_worker's ANTHROPIC_API_KEY gate), and run_sweep()
-    # independently re-checks both vars at call time (mirrors code_runner's GITHUB_TOKEN
-    # fail-fast) -- so any future manual "run a sweep now" path is protected the same way.
-    if _started or not (os.getenv("ANTHROPIC_API_KEY") and os.getenv("RAILWAY_TOKEN")):
+    # (mirrors start_investigation_worker's llm_client.is_configured() gate), and
+    # run_sweep() independently re-checks both vars at call time (mirrors code_runner's
+    # GITHUB_TOKEN fail-fast) -- so any future manual "run a sweep now" path is protected
+    # the same way.
+    if _started or not (llm_client.is_configured() and os.getenv("RAILWAY_TOKEN")):
         return
     with _lock:
         if _started:
