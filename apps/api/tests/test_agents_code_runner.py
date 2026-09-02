@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 from app.agents import code_runner
@@ -8,22 +9,26 @@ from app.db import session_scope
 from app.models import AgentInvestigationRecord, EventRecord
 
 
-class FakeToolUseBlock:
-    def __init__(self, name, input, id="toolu_1"):
-        self.type = "tool_use"
-        self.name = name
-        self.input = input
-        self.id = id
+@pytest.fixture(autouse=True)
+def _default_provider_key(monkeypatch):
+    # _call_model is always monkeypatched in this file's tests, so the real client is
+    # never used -- but run_code_diagnosis() still calls llm_client.get_client() first,
+    # which would raise LLMConfigError with no provider configured at all. A fake
+    # Anthropic key keeps that harmless, matching anthropic.Anthropic()'s old
+    # lazy-validation behavior these tests already relied on.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-key-not-real")
 
 
-class FakeTextBlock:
-    def __init__(self, text):
-        self.type = "text"
-        self.text = text
+def _tool_use(name, input, id="toolu_1"):
+    return {"type": "tool_use", "name": name, "input": input, "id": id}
+
+
+def _text(text):
+    return {"type": "text", "text": text}
 
 
 def _fake_message(content, stop_reason, input_tokens=333, output_tokens=44):
-    return SimpleNamespace(content=content, stop_reason=stop_reason, usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens))
+    return SimpleNamespace(content=content, stop_reason=stop_reason, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 def _seed_event_and_parent(system_id: str) -> tuple[int, int]:
@@ -66,9 +71,9 @@ def test_run_code_diagnosis_success_after_one_tool_call(monkeypatch):
     job = _job(event_id, parent_id, "coderunner-success-system")
 
     responses = [
-        _fake_message([FakeToolUseBlock("get_prior_investigation", {})], "tool_use"),
+        _fake_message([_tool_use("get_prior_investigation", {})], "tool_use"),
         _fake_message(
-            [FakeToolUseBlock("submit_investigation_result", {
+            [_tool_use("submit_investigation_result", {
                 "hypothesis": "A recent change to the retry backoff looks like the cause.",
                 "recommended_next_step": "Review commit abc123 in backend/retry.py.",
                 "confidence": 0.7,
@@ -122,7 +127,7 @@ def test_run_code_diagnosis_no_tool_use_is_recorded_as_failed(monkeypatch):
     event_id, parent_id = _seed_event_and_parent("coderunner-no-tool-use-system")
     job = _job(event_id, parent_id, "coderunner-no-tool-use-system")
 
-    monkeypatch.setattr(code_runner, "_call_model", lambda client, messages: _fake_message([FakeTextBlock("Not sure.")], "end_turn"))
+    monkeypatch.setattr(code_runner, "_call_model", lambda client, messages: _fake_message([_text("Not sure.")], "end_turn"))
 
     code_runner.run_code_diagnosis(job)
 
@@ -154,7 +159,7 @@ def test_run_code_diagnosis_exceeds_max_turns_is_recorded_as_failed(monkeypatch)
     job = _job(event_id, parent_id, "coderunner-max-turns-system")
     monkeypatch.setattr(code_runner, "MAX_TURNS", 2)
 
-    monkeypatch.setattr(code_runner, "_call_model", lambda client, messages: _fake_message([FakeToolUseBlock("get_prior_investigation", {})], "tool_use"))
+    monkeypatch.setattr(code_runner, "_call_model", lambda client, messages: _fake_message([_tool_use("get_prior_investigation", {})], "tool_use"))
 
     code_runner.run_code_diagnosis(job)
 
