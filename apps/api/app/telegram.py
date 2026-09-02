@@ -3,11 +3,11 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
-import anthropic
 import httpx
 from fastapi import APIRouter, Request
 from sqlalchemy import func, select
 
+from . import llm_client
 from .db import session_scope
 from .escalations import sync_escalation_status, trigger_manual_investigation
 from .integrations_router import twilio_configured
@@ -18,7 +18,7 @@ TELEGRAM_API_BASE = "https://api.telegram.org"
 
 router = APIRouter(prefix="/api/v1/telegram", tags=["telegram"])
 
-MODEL = os.getenv("VOLT_TELEGRAM_MODEL", "claude-sonnet-4-5")
+MODEL = os.getenv("VOLT_TELEGRAM_MODEL") or llm_client.default_model()
 
 
 def _telegram_request(method: str, payload: dict) -> dict | None:
@@ -119,8 +119,8 @@ _HELP_TEXT = (
 )
 
 # Not an agent with tools -- a single forced-tool-choice call to get structured output
-# from a free-text request, same anthropic.Anthropic()/ANTHROPIC_API_KEY every agent
-# already uses, without hand-rolling a natural-language parser.
+# from a free-text request, same llm_client every agent already uses, without
+# hand-rolling a natural-language parser.
 CLASSIFY_TOOL_NAME = "classify_telegram_request"
 CLASSIFY_TOOL_SCHEMA = {
     "name": CLASSIFY_TOOL_NAME,
@@ -163,22 +163,22 @@ _CLASSIFY_SYSTEM_PROMPT = (
 
 
 def classify_telegram_request(text: str) -> dict | None:
-    # None means "couldn't classify" (no ANTHROPIC_API_KEY, or the model didn't call the
-    # tool) -- the caller degrades to the help text, never crashes.
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    # None means "couldn't classify" (no provider configured, or the model didn't call
+    # the tool) -- the caller degrades to the help text, never crashes.
+    if not llm_client.is_configured():
         return None
-    client = anthropic.Anthropic()
-    response = client.messages.create(
+    client = llm_client.get_client()
+    response = client.call(
         model=MODEL,
         max_tokens=512,
         system=_CLASSIFY_SYSTEM_PROMPT,
         tools=[CLASSIFY_TOOL_SCHEMA],
-        tool_choice={"type": "tool", "name": CLASSIFY_TOOL_NAME},
+        tool_choice=CLASSIFY_TOOL_NAME,
         messages=[{"role": "user", "content": text}],
     )
     for block in response.content:
-        if getattr(block, "type", None) == "tool_use":
-            return block.input
+        if block.get("type") == "tool_use":
+            return block["input"]
     return None
 
 
