@@ -97,6 +97,53 @@ def test_run_investigation_success_after_one_tool_call(monkeypatch):
     assert record.output_tokens == 22
 
 
+def test_call_tool_handler_drops_arguments_the_handler_does_not_accept():
+    # Reproduces a real production crash: DeepSeek called get_incident_event (a
+    # zero-parameter tool per its own schema) with an unsolicited "limit" argument,
+    # and get_incident_event(job) has no **kwargs to absorb it.
+    def get_incident_event(job):
+        return {"job_event_id": job.event_id}
+
+    job = InvestigationJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1")
+    result = runner._call_tool_handler(get_incident_event, job, {"limit": 20})
+
+    assert result == {"job_event_id": 1}
+
+
+def test_call_tool_handler_still_passes_through_arguments_the_handler_does_accept():
+    def get_recent_system_events(job, limit=20):
+        return {"limit_used": limit}
+
+    job = InvestigationJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1")
+    result = runner._call_tool_handler(get_recent_system_events, job, {"limit": 5})
+
+    assert result == {"limit_used": 5}
+
+
+def test_run_investigation_survives_a_tool_call_with_an_unexpected_argument(monkeypatch):
+    event_id = _seed_event("runner-unexpected-tool-arg-system")
+    job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-unexpected-tool-arg-system", environment="production", priority="P2")
+
+    responses = [
+        # get_incident_event's schema takes no parameters, but the model calls it with
+        # one anyway -- must not crash the whole investigation.
+        _fake_message([_tool_use("get_incident_event", {"limit": 20})], "tool_use"),
+        _submit_response(is_known_pattern=True),
+    ]
+    calls = []
+
+    def fake_call_model(client, messages):
+        calls.append(messages)
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(runner, "_call_model", fake_call_model)
+
+    runner.run_investigation(job)
+
+    record = _latest_investigation(event_id)
+    assert record.status == "completed"
+
+
 def test_run_investigation_no_tool_use_is_recorded_as_failed(monkeypatch):
     event_id = _seed_event("runner-no-tool-use-system")
     job = InvestigationJob(event_id=event_id, escalation_id=999, system="runner-no-tool-use-system", environment="production", priority="P2")

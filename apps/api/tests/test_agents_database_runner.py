@@ -31,6 +31,16 @@ def _fake_message(content, stop_reason, input_tokens=55, output_tokens=6):
     return SimpleNamespace(content=content, stop_reason=stop_reason, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
+def test_call_tool_handler_drops_arguments_the_handler_does_not_accept():
+    def get_backup_status(job):
+        return {"job_event_id": job.event_id}
+
+    job = DatabaseJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1", parent_investigation_id=1)
+    result = database_runner._call_tool_handler(get_backup_status, job, {"limit": 20})
+
+    assert result == {"job_event_id": 1}
+
+
 def _job(event_id: int, parent_id: int = 42) -> DatabaseJob:
     return DatabaseJob(event_id=event_id, escalation_id=999, system="dbrunner-system", environment="production", priority="P2", parent_investigation_id=parent_id)
 

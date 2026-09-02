@@ -31,6 +31,16 @@ def _fake_message(content, stop_reason, input_tokens=77, output_tokens=8):
     return SimpleNamespace(content=content, stop_reason=stop_reason, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
+def test_call_tool_handler_drops_arguments_the_handler_does_not_accept():
+    def get_account_balance(job):
+        return {"job_event_id": job.event_id}
+
+    job = FinanceJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1", stripe_key_env_var="STRIPE_SECRET_KEY_TEST", parent_investigation_id=1)
+    result = finance_runner._call_tool_handler(get_account_balance, job, {"limit": 20})
+
+    assert result == {"job_event_id": 1}
+
+
 def _job(event_id: int, parent_id: int = 42) -> FinanceJob:
     return FinanceJob(
         event_id=event_id, escalation_id=999, system="financerunner-system", environment="production",

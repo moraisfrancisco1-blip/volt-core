@@ -31,6 +31,16 @@ def _fake_message(content, stop_reason, input_tokens=333, output_tokens=44):
     return SimpleNamespace(content=content, stop_reason=stop_reason, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
+def test_call_tool_handler_drops_arguments_the_handler_does_not_accept():
+    def list_repo_files(job):
+        return {"job_event_id": job.event_id}
+
+    job = CodeDiagnosisJob(event_id=1, escalation_id=2, system="s", environment="production", priority="P1", owner="acme", repo="widget", parent_investigation_id=1)
+    result = code_runner._call_tool_handler(list_repo_files, job, {"limit": 20})
+
+    assert result == {"job_event_id": 1}
+
+
 def _seed_event_and_parent(system_id: str) -> tuple[int, int]:
     with session_scope() as session:
         event = EventRecord(
