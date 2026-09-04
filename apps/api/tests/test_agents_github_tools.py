@@ -1,3 +1,7 @@
+import io
+import os
+import tarfile
+import tempfile
 from types import SimpleNamespace
 
 from app.agents import github_tools
@@ -195,3 +199,45 @@ def test_get_prior_investigation_reads_from_db():
 def test_get_prior_investigation_missing():
     result = github_tools.get_prior_investigation(_job(parent_investigation_id=999999))
     assert result == {"error": "prior investigation not found"}
+
+
+def _build_fake_tarball_bytes(nested_dir_name: str) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        file_content = b"print('hello')\n"
+        info = tarfile.TarInfo(name=f"{nested_dir_name}/main.py")
+        info.size = len(file_content)
+        archive.addfile(info, io.BytesIO(file_content))
+    return buffer.getvalue()
+
+
+def test_download_repo_tarball_success(monkeypatch):
+    tarball_bytes = _build_fake_tarball_bytes("acme-widget-abc123")
+    monkeypatch.setattr(github_tools, "_github_request", lambda method, path, **kwargs: SimpleNamespace(status_code=200, content=tarball_bytes))
+
+    dest_dir = tempfile.mkdtemp(prefix="github-tarball-test-")
+    root = github_tools.download_repo_tarball("acme", "widget", dest_dir)
+
+    assert root == os.path.join(dest_dir, "acme-widget-abc123")
+    assert os.path.exists(os.path.join(root, "main.py"))
+
+
+def test_download_repo_tarball_returns_none_on_non_200(monkeypatch):
+    monkeypatch.setattr(github_tools, "_github_request", lambda method, path, **kwargs: SimpleNamespace(status_code=404, content=b""))
+
+    dest_dir = tempfile.mkdtemp(prefix="github-tarball-test-")
+    assert github_tools.download_repo_tarball("acme", "widget", dest_dir) is None
+
+
+def test_download_repo_tarball_returns_none_on_transport_failure(monkeypatch):
+    monkeypatch.setattr(github_tools, "_github_request", lambda method, path, **kwargs: None)
+
+    dest_dir = tempfile.mkdtemp(prefix="github-tarball-test-")
+    assert github_tools.download_repo_tarball("acme", "widget", dest_dir) is None
+
+
+def test_download_repo_tarball_returns_none_on_corrupt_archive(monkeypatch):
+    monkeypatch.setattr(github_tools, "_github_request", lambda method, path, **kwargs: SimpleNamespace(status_code=200, content=b"not a real tarball"))
+
+    dest_dir = tempfile.mkdtemp(prefix="github-tarball-test-")
+    assert github_tools.download_repo_tarball("acme", "widget", dest_dir) is None

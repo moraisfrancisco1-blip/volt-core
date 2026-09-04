@@ -94,7 +94,12 @@ def test_list_investigations_filters_by_parent_investigation_id():
         response = client.get(f"/api/investigations?parent_investigation_id={parent_id}")
         assert response.status_code == 200
         rows = response.json()
-        assert {item["id"] for item in rows} == {child_id}
-        assert rows[0]["repo_owner"] == "acme"
-        assert rows[0]["repo_name"] == "widget"
-        assert rows[0]["parent_investigation_id"] == parent_id
+        # Other test files persist real rows with a hardcoded parent_investigation_id
+        # (e.g. 42) as a fixture default, which can coincidentally equal this test's own
+        # dynamically-assigned parent_id -- scope the check to this test's own child
+        # instead of asserting the filtered result set is exactly {child_id}.
+        match = next(item for item in rows if item["id"] == child_id)
+        assert match["repo_owner"] == "acme"
+        assert match["repo_name"] == "widget"
+        assert match["parent_investigation_id"] == parent_id
+        assert all(item["parent_investigation_id"] == parent_id for item in rows)

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.agents import code_runner
+from app.agents import code_runner, sandbox
 from app.agents.github_tools import CodeDiagnosisJob
 from app.db import session_scope
 from app.models import AgentInvestigationRecord, EventRecord
@@ -113,6 +113,83 @@ def test_run_code_diagnosis_success_after_one_tool_call(monkeypatch):
     assert record.turns_used == 2
     assert record.input_tokens == 333
     assert record.output_tokens == 44
+
+
+def test_run_code_diagnosis_with_proposed_files_runs_the_sandbox(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
+    event_id, parent_id = _seed_event_and_parent("coderunner-sandbox-system")
+    job = _job(event_id, parent_id, "coderunner-sandbox-system")
+    proposed_files = [{"file_path": "app/models.py", "new_content": "x = 1\n"}]
+
+    monkeypatch.setattr(
+        code_runner, "_call_model",
+        lambda client, messages: _fake_message(
+            [_tool_use("submit_investigation_result", {
+                "hypothesis": "Off-by-one in the retry counter.",
+                "recommended_next_step": "Apply the attached fix.",
+                "confidence": 0.8,
+                "is_known_pattern": False,
+                "proposed_files": proposed_files,
+            })],
+            "tool_use",
+        ),
+    )
+    sandbox_calls = []
+
+    def fake_run_sandboxed_fix(owner, repo, files, timeout_seconds):
+        sandbox_calls.append((owner, repo, files, timeout_seconds))
+        return {"status": "passed", "output": "1 passed", "install_output": None, "network_isolated": True, "ran_at": "2026-09-04T00:00:00+00:00"}
+
+    monkeypatch.setattr(sandbox, "run_sandboxed_fix", fake_run_sandboxed_fix)
+
+    code_runner.run_code_diagnosis(job)
+
+    assert len(sandbox_calls) == 1
+    assert sandbox_calls[0][0] == "acme"
+    assert sandbox_calls[0][1] == "widget"
+    assert sandbox_calls[0][2] == proposed_files
+
+    record = _latest_code_diagnosis(event_id)
+    assert record.status == "completed"
+    assert record.proposed_files == proposed_files
+    assert record.sandbox_status == "passed"
+    assert record.sandbox_output == "1 passed"
+    assert record.sandbox_network_isolated is True
+    assert record.sandbox_ran_at is not None
+
+
+def test_run_code_diagnosis_without_proposed_files_never_runs_the_sandbox(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
+    event_id, parent_id = _seed_event_and_parent("coderunner-no-sandbox-system")
+    job = _job(event_id, parent_id, "coderunner-no-sandbox-system")
+
+    monkeypatch.setattr(
+        code_runner, "_call_model",
+        lambda client, messages: _fake_message(
+            [_tool_use("submit_investigation_result", {
+                "hypothesis": "Diagnosis only, no fix proposed.",
+                "recommended_next_step": "Review manually.",
+                "confidence": 0.5,
+                "is_known_pattern": False,
+            })],
+            "tool_use",
+        ),
+    )
+
+    def _forbidden(*a, **k):
+        raise AssertionError("run_sandboxed_fix must not be called without proposed_files")
+
+    monkeypatch.setattr(sandbox, "run_sandboxed_fix", _forbidden)
+
+    code_runner.run_code_diagnosis(job)
+
+    record = _latest_code_diagnosis(event_id)
+    assert record.status == "completed"
+    assert record.proposed_files is None
+    assert record.sandbox_status == "not_attempted"
+    assert record.sandbox_output is None
+    assert record.sandbox_network_isolated is None
+    assert record.sandbox_ran_at is None
 
 
 def test_run_code_diagnosis_without_github_token_fails_fast_without_calling_model(monkeypatch):
