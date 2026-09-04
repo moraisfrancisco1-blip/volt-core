@@ -56,6 +56,9 @@ h1, h2, h3, p { margin: 0; }
 .row-1 { display: flex; gap: 16px; height: 308px; }
 .row-2 { display: flex; gap: 16px; height: 236px; }
 .row-3 { display: flex; gap: 16px; flex: 1; min-height: 200px; }
+.row-4 { display: flex; gap: 16px; }
+.market-intel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+@media (max-width: 900px) { .market-intel-grid { grid-template-columns: 1fr; } }
 
 /* Volt Core overview */
 .overview-panel { width: 262px; flex-shrink: 0; overflow-y: auto; }
