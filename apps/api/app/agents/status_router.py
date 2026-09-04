@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AgentInvestigationRecord, MonitoringSweepRecord
-from . import agent_inbox, production_monitor
+from ..models import AgentInvestigationRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord
+from . import agent_inbox, market_intelligence, production_monitor
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -58,6 +58,20 @@ def agents_status() -> list[dict]:
             "state": sweep_state,
             "last_activity_at": _iso(sweep_latest.completed_at or sweep_latest.created_at) if sweep_latest else None,
             "last_status": sweep_latest.status if sweep_latest else None,
+        })
+
+        report_latest = session.scalar(select(MarketIntelligenceReportRecord).order_by(MarketIntelligenceReportRecord.id.desc()))
+        if market_intelligence.is_sweep_in_progress():
+            report_state = "working"
+        elif report_latest is not None and report_latest.status == "failed":
+            report_state = "error"
+        else:
+            report_state = "idle"
+        results.append({
+            "agent": "market_intelligence",
+            "state": report_state,
+            "last_activity_at": _iso(report_latest.completed_at or report_latest.created_at) if report_latest else None,
+            "last_status": report_latest.status if report_latest else None,
         })
 
         return results

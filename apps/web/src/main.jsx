@@ -11,19 +11,21 @@ import QuickCommands from './components/QuickCommands.jsx';
 import SystemMonitor from './components/SystemMonitor.jsx';
 import InvestigationHistory from './components/InvestigationHistory.jsx';
 import IntegrationsPanel from './components/IntegrationsPanel.jsx';
+import MarketIntelligencePanel from './components/MarketIntelligencePanel.jsx';
 
 const API = (import.meta.env.VITE_API_URL || 'https://api-production-c073.up.railway.app').replace(/\/$/, '');
 const INVESTIGATIONS_FETCH_LIMIT = 100;
 
 // Mirrors each reactive agent's investigation_type -- kept in sync manually with the
 // backend (apps/api/app/agents/*_runner.py and agents/status_router.py).
-const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor'];
+const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence'];
 const AGENT_LABELS = {
   volt: ['VOLT', 'voice_call_failure'],
   dev_debug: ['DEV/DEBUG', 'code_diagnosis'],
   database: ['DATABASE', 'database_diagnosis'],
   finance: ['FINANCE', 'finance_diagnosis'],
   production_monitor: ['PRODUCTION MONITOR', null],
+  market_intelligence: ['INTELIGÊNCIA DE MERCADO', null],
 };
 
 function truncate(text, max = 60) {
@@ -46,6 +48,7 @@ function App() {
   const [escalations, setEscalations] = useState([]);
   const [investigations, setInvestigations] = useState([]);
   const [sweeps, setSweeps] = useState([]);
+  const [marketIntelReports, setMarketIntelReports] = useState([]);
   const [agentsStatus, setAgentsStatus] = useState([]);
   const [integrationsStatus, setIntegrationsStatus] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -55,12 +58,13 @@ function App() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/investigations?limit=${INVESTIGATIONS_FETCH_LIMIT}`, { cache: 'no-store' }),
         fetch(`${API}/api/monitoring-sweeps?limit=20`, { cache: 'no-store' }),
+        fetch(`${API}/api/market-intelligence-reports?limit=10`, { cache: 'no-store' }),
         fetch(`${API}/api/agents/status`, { cache: 'no-store' }),
         fetch(`${API}/api/integrations/status`, { cache: 'no-store' }),
       ]);
@@ -69,6 +73,7 @@ function App() {
       if (!escalationsResponse.ok) throw new Error(`escalation queue unavailable (${escalationsResponse.status})`);
       if (!investigationsResponse.ok) throw new Error(`agent investigations unavailable (${investigationsResponse.status})`);
       if (!sweepsResponse.ok) throw new Error(`monitoring sweeps unavailable (${sweepsResponse.status})`);
+      if (!marketIntelResponse.ok) throw new Error(`market intelligence reports unavailable (${marketIntelResponse.status})`);
       if (!agentsStatusResponse.ok) throw new Error(`agent status unavailable (${agentsStatusResponse.status})`);
       if (!integrationsStatusResponse.ok) throw new Error(`integrations status unavailable (${integrationsStatusResponse.status})`);
       setDashboard(await dashboardResponse.json());
@@ -76,6 +81,7 @@ function App() {
       setEscalations(await escalationsResponse.json());
       setInvestigations(await investigationsResponse.json());
       setSweeps(await sweepsResponse.json());
+      setMarketIntelReports(await marketIntelResponse.json());
       setAgentsStatus(await agentsStatusResponse.json());
       setIntegrationsStatus(await integrationsStatusResponse.json());
     } catch (err) {
@@ -105,6 +111,9 @@ function App() {
     if (agentId === 'production_monitor') {
       const latest = sweeps[0];
       lastActivityText = latest ? truncate(latest.summary || latest.error || 'sem resumo') : '';
+    } else if (agentId === 'market_intelligence') {
+      const latest = marketIntelReports[0];
+      lastActivityText = latest ? truncate(latest.error || latest.competitors_summary || 'sem resumo') : '';
     } else {
       const latest = (investigationsByType[investigationType] || [])[0];
       lastActivityText = latest ? truncate((latest.status === 'failed' ? latest.error : latest.hypothesis) || 'sem resumo') : '';
@@ -180,6 +189,10 @@ function App() {
             <SystemMonitor railwayConfigured={railwayConfigured} />
             <InvestigationHistory investigations={investigations} fetchLimit={INVESTIGATIONS_FETCH_LIMIT} />
             <IntegrationsPanel integrations={integrationsStatus} />
+          </div>
+
+          <div className="row-4">
+            <MarketIntelligencePanel reports={marketIntelReports} />
           </div>
 
           <div className="row footer-row">
