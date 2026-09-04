@@ -166,6 +166,40 @@ class MarketIntelligenceReportRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class SalesLeadRecord(Base):
+    __tablename__ = "sales_leads"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lead_type: Mapped[str] = mapped_column(String(32), index=True)  # "consumer_inbound" | "b2b_partner"
+    status: Mapped[str] = mapped_column(String(32), default="new", index=True)  # "new" | "qualified" | "dismissed"
+    source: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    name: Mapped[str] = mapped_column(String(160))
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    company: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consent_basis: Mapped[str] = mapped_column(String(64))
+    fit_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    qualification_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suggested_next_step: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scheduled_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    call_prep_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    qualified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SalesOutreachDraftRecord(Base):
+    __tablename__ = "sales_outreach_drafts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(Integer, index=True)
+    subject: Mapped[str] = mapped_column(String(255))
+    body: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending_approval", index=True)
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class TelegramScheduleRecord(Base):
     __tablename__ = "telegram_schedules"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

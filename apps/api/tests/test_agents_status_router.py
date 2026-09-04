@@ -1,7 +1,7 @@
-from app.agents import agent_inbox, market_intelligence, production_monitor
+from app.agents import agent_inbox, market_intelligence, production_monitor, sales_agent
 from app.agents.status_router import agents_status
 from app.db import session_scope
-from app.models import AgentInvestigationRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord
+from app.models import AgentInvestigationRecord, AuditRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord
 
 
 def _seed_investigation(investigation_type: str, status: str, system: str) -> None:
@@ -22,18 +22,19 @@ def _seed_report(status: str) -> None:
         session.add(MarketIntelligenceReportRecord(status=status))
 
 
-def test_agents_status_returns_all_six_agents_with_valid_states(monkeypatch):
+def test_agents_status_returns_all_seven_agents_with_valid_states(monkeypatch):
     monkeypatch.setattr(agent_inbox, "_current_message_type", None)
     monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
     monkeypatch.setattr(market_intelligence, "_sweep_in_progress", False)
+    monkeypatch.setattr(sales_agent, "_sweep_in_progress", False)
 
     results = {row["agent"]: row for row in agents_status()}
 
-    # Other tests in the same run seed their own investigation/sweep/report rows, so
-    # this doesn't assert "no history" -- only that every agent is represented with a
-    # well-formed state, which is what a genuinely empty VOLT CORE instance would
+    # Other tests in the same run seed their own investigation/sweep/report/lead rows,
+    # so this doesn't assert "no history" -- only that every agent is represented with
+    # a well-formed state, which is what a genuinely empty VOLT CORE instance would
     # also see (idle, null last_activity_at) before any incident ever occurs.
-    assert set(results.keys()) == {"volt", "dev_debug", "database", "finance", "production_monitor", "market_intelligence"}
+    assert set(results.keys()) == {"volt", "dev_debug", "database", "finance", "production_monitor", "market_intelligence", "sales"}
     for row in results.values():
         assert row["state"] in {"idle", "error", "working"}
 
@@ -112,3 +113,26 @@ def test_latest_failed_report_reports_error_when_not_in_progress(monkeypatch):
 
     assert results["market_intelligence"]["state"] == "error"
     assert results["market_intelligence"]["last_status"] == "failed"
+
+
+def test_sales_sweep_in_progress_reports_working(monkeypatch):
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
+    monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
+    monkeypatch.setattr(sales_agent, "_sweep_in_progress", True)
+
+    results = {row["agent"]: row for row in agents_status()}
+
+    assert results["sales"]["state"] == "working"
+
+
+def test_sales_failed_audit_reports_error_when_not_in_progress(monkeypatch):
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
+    monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
+    monkeypatch.setattr(sales_agent, "_sweep_in_progress", False)
+    with session_scope() as session:
+        session.add(AuditRecord(type="sales_sweep_failed", detail="boom"))
+
+    results = {row["agent"]: row for row in agents_status()}
+
+    assert results["sales"]["state"] == "error"
+    assert results["sales"]["last_status"] == "failed"

@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AgentInvestigationRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord
-from . import agent_inbox, market_intelligence, production_monitor
+from ..models import AgentInvestigationRecord, AuditRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import agent_inbox, market_intelligence, production_monitor, sales_agent
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -72,6 +72,31 @@ def agents_status() -> list[dict]:
             "state": report_state,
             "last_activity_at": _iso(report_latest.completed_at or report_latest.created_at) if report_latest else None,
             "last_status": report_latest.status if report_latest else None,
+        })
+
+        # Sales has no single "last sweep" record (it processes many leads/drafts per
+        # sweep, each failure logged and isolated individually) -- state instead reads
+        # the most recent sales_* audit entry, and last_activity_at reads whichever of
+        # leads/drafts was touched most recently.
+        sales_audit_latest = session.scalar(
+            select(AuditRecord).where(AuditRecord.type.like("sales_%")).order_by(AuditRecord.id.desc())
+        )
+        lead_latest = session.scalar(select(SalesLeadRecord).order_by(SalesLeadRecord.id.desc()))
+        draft_latest = session.scalar(select(SalesOutreachDraftRecord).order_by(SalesOutreachDraftRecord.id.desc()))
+        lead_activity = (lead_latest.qualified_at or lead_latest.created_at) if lead_latest else None
+        draft_activity = draft_latest.created_at if draft_latest else None
+        sales_activity = max((t for t in (lead_activity, draft_activity) if t is not None), default=None)
+        if sales_agent.is_sweep_in_progress():
+            sales_state = "working"
+        elif sales_audit_latest is not None and sales_audit_latest.type.endswith("_failed"):
+            sales_state = "error"
+        else:
+            sales_state = "idle"
+        results.append({
+            "agent": "sales",
+            "state": sales_state,
+            "last_activity_at": _iso(sales_activity),
+            "last_status": "failed" if sales_state == "error" else ("completed" if sales_activity else None),
         })
 
         return results
