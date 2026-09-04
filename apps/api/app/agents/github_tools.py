@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import tarfile
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -186,6 +187,31 @@ def get_recent_commits(job: CodeDiagnosisJob, path: str = "", limit: int = 10) -
             for item in response.json()
         ]
     }
+
+
+def download_repo_tarball(owner: str, repo: str, dest_dir: str) -> str | None:
+    # Materializes a full repo snapshot onto local disk for the Dev/Debug sandbox
+    # (Phase 4) to apply a proposed fix and run tests against -- never exposed as a
+    # model tool itself, only called by sandbox.py after a fix has already been
+    # submitted. Reuses the same _github_request auth seam as every read-only tool
+    # above rather than reimplementing GitHub auth.
+    response = _github_request("GET", f"/repos/{owner}/{repo}/tarball", follow_redirects=True)
+    if response is None or response.status_code != 200:
+        return None
+    archive_path = os.path.join(dest_dir, "repo.tar.gz")
+    try:
+        with open(archive_path, "wb") as archive_file:
+            archive_file.write(response.content)
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(dest_dir, filter="data")
+        os.remove(archive_path)
+    except (OSError, tarfile.TarError):
+        return None
+    # GitHub nests everything under one "{owner}-{repo}-{sha}/" directory.
+    entries = [name for name in os.listdir(dest_dir) if os.path.isdir(os.path.join(dest_dir, name))]
+    if len(entries) != 1:
+        return None
+    return os.path.join(dest_dir, entries[0])
 
 
 def get_prior_investigation(job: CodeDiagnosisJob) -> dict:
