@@ -32,5 +32,9 @@ def send_email(to_address: str, subject: str, body: str) -> bool:
             client.login(user, password)
             client.send_message(message)
         return True
-    except (smtplib.SMTPException, OSError, socket.error):
+    except (smtplib.SMTPException, OSError, socket.error) as exc:
+        # Never leak the password, but the exception type/message alone (e.g. "auth
+        # failed", "connection refused") is the only way to diagnose a real SMTP
+        # provider from Railway's deploy logs without exposing credentials.
+        print(f"[volt-core-sales] SMTP send failed: {type(exc).__name__}: {exc}")
         return False
