@@ -170,6 +170,6 @@ def approve_and_send_outreach_draft(draft_id: int) -> dict:
         draft.status = "approved_sent" if sent else "send_failed"
         draft.approved_at = datetime.now(timezone.utc)
         if not sent:
-            draft.error = "SMTP send failed or not configured -- check VOLT_SMTP_* variables"
+            draft.error = "SMTP send failed or not configured -- check SMTP_* variables"
         session.add(AuditRecord(type="sales_outreach_approved_and_sent" if sent else "sales_outreach_send_failed", reference_id=str(draft_id)))
         return draft_dict(draft)

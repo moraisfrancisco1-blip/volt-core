@@ -12,13 +12,13 @@ def send_email(to_address: str, subject: str, body: str) -> bool:
     # matching send_telegram_message's degrade-gracefully contract. This is the ONLY
     # function in the whole app that ever sends a real email, and it is only ever called
     # from the approve-and-send endpoint handler -- never from the agent's own sweep.
-    host = os.getenv("VOLT_SMTP_HOST")
-    user = os.getenv("VOLT_SMTP_USER")
-    password = os.getenv("VOLT_SMTP_PASSWORD")
-    from_address = os.getenv("VOLT_SMTP_FROM")
+    host = os.getenv("SMTP_HOST")
+    user = os.getenv("SMTP_USER")
+    password = os.getenv("SMTP_PASSWORD")
+    from_address = os.getenv("SMTP_FROM")
     if not host or not user or not password or not from_address:
         return False
-    port = int(os.getenv("VOLT_SMTP_PORT", "587"))
+    port = int(os.getenv("SMTP_PORT", "587"))
 
     message = EmailMessage()
     message["Subject"] = subject
