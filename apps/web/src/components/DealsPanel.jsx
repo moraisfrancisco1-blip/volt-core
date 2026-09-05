@@ -101,7 +101,7 @@ function CloseSuggestionRow({ deal, apiBase, onUpdated }) {
   );
 }
 
-function DealsPanel({ deals, proposals, apiBase, onProposalUpdated, onDealUpdated }) {
+function DealsPanel({ deals, proposals, apiBase, onProposalUpdated, onDealUpdated, onSelectDeal }) {
   const stageCounts = STAGE_ORDER.map(stage => ({ stage, count: (deals || []).filter(d => d.stage === stage).length }));
   const pendingProposals = (proposals || []).filter(p => p.status === 'pending_approval').slice(0, 4);
   const staleDeals = (deals || []).filter(d => d.stale).slice(0, 4);
@@ -146,7 +146,12 @@ function DealsPanel({ deals, proposals, apiBase, onProposalUpdated, onDealUpdate
             : (
               <div className="feed-list">
                 {staleDeals.map(d => (
-                  <div className="feed-item" style={{ borderLeftColor: '#e0793c' }} key={d.id}>
+                  <div
+                    className={`feed-item${onSelectDeal ? ' clickable-row' : ''}`}
+                    style={{ borderLeftColor: '#e0793c' }}
+                    key={d.id}
+                    onClick={onSelectDeal ? () => onSelectDeal(d) : undefined}
+                  >
                     <div className="row" style={{ justifyContent: 'space-between' }}>
                       <span className="mono feed-item-tag" style={{ color: '#e0793c' }}>{STAGE_LABEL[d.stage]}</span>
                     </div>

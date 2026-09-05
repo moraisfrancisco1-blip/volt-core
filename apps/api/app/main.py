@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timezone
 from enum import Enum
 from fastapi import Depends, FastAPI, HTTPException
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from .voice import get_voice_provider, build_voice_script
 from .approvals import ApprovalDecision
 from .action_gate import ActionEnvironment, ActionStatus, evaluate_action
+from .escalations import trigger_manual_investigation
 from .agents.agent_inbox import start_agent_inbox_worker
 from .agents.production_monitor import start_production_monitor
 from .agents.market_intelligence import start_market_intelligence
@@ -55,6 +57,7 @@ VOICE_PRIORITIES = {"P1", "P2", "P3"}
 class SystemRegistration(BaseModel): name: str; environment: str = "production"
 class WatchEvent(BaseModel): system: str; level: str; message: str
 class VoiceCallRequest(BaseModel): event_id: int; to: str
+class ManualInvestigationRequest(BaseModel): system_id: str; environment: str = "production"
 class ApprovalRequest(BaseModel): event_id: int; action: str
 class ApprovalDecisionRequest(BaseModel): decision: ApprovalDecision
 class ActionRequest(BaseModel): approval_id: int; environment: ActionEnvironment = ActionEnvironment.STAGING
@@ -143,3 +146,35 @@ def list_actions(limit: int = 100) -> list[dict]:
 @app.get("/api/v1/audit", dependencies=[Depends(require_scope("audit:read"))])
 def audit_log(limit: int = 100) -> list[dict]:
     with session_scope() as session: return [{"id": i.id, "type": i.type, "reference_id": i.reference_id, "detail": i.detail, "created_at": i.created_at.isoformat() if i.created_at else None} for i in session.scalars(select(AuditRecord).order_by(AuditRecord.id.desc()).limit(min(max(limit,1),500))).all()]
+
+# Internal dashboard triggers -- no auth, same convention as the other manual-trigger
+# endpoints (monitoring-sweeps/run, sales/run, deals/run, marketing/run): this is a
+# single-user system, and these are dashboard buttons, not an external ingestion API.
+@app.post("/api/investigations/trigger-manual")
+def trigger_manual_investigation_endpoint(request: ManualInvestigationRequest) -> dict:
+    with session_scope() as session:
+        event, escalation = trigger_manual_investigation(session, request.system_id, request.environment, source="dashboard")
+        session.flush()
+        return {"event_id": event.id, "escalation_id": escalation.id, "system_id": request.system_id}
+
+@app.post("/api/voice/test-call")
+def dispatch_test_call() -> dict:
+    to = os.getenv("VOLT_ALERT_PHONE")
+    if not to:
+        raise HTTPException(status_code=400, detail="VOLT_ALERT_PHONE not configured")
+    script = "Chamada de teste do VOLT CORE. Se está a ouvir isto, a linha de escalonamento está operacional."
+    with session_scope() as session:
+        # A real EventRecord to anchor the VoiceCallRecord to (matches
+        # trigger_manual_investigation's own approach) -- never goes through
+        # create_event/decide_event, so it can never trigger a second, duplicate call.
+        event = EventRecord(
+            system="volt-core", system_id="volt-core", system_name="VOLT CORE", environment="production",
+            level="INFO", severity="info", priority="P4", event_type="test_call",
+            recommended_action="call", message="Chamada de teste manual disparada pelo dashboard.", status="resolved",
+        )
+        session.add(event); session.flush()
+        result = voice_provider.place_call(to, script)
+        call = VoiceCallRecord(event_id=event.id, status=result["status"], provider=result["provider"], destination=to, script=script)
+        session.add(call); session.flush()
+        session.add(AuditRecord(type="test_call_dispatched", reference_id=str(call.id), detail=result.get("sid", "")))
+        return call_dict(call)

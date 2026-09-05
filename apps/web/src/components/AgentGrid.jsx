@@ -3,7 +3,7 @@ import React from 'react';
 const STATE_COLOR = { working: '#f0b429', error: '#d9614f', idle: '#7d7062' };
 const STATE_LABEL = { working: 'A TRABALHAR', error: 'ERRO', idle: 'IDLE' };
 
-function AgentGrid({ agents }) {
+function AgentGrid({ agents, onSelect }) {
   return (
     <div className="panel agents-panel">
       <div className="panel-title">AGENTES ATIVOS</div>
@@ -11,7 +11,11 @@ function AgentGrid({ agents }) {
         {agents.map(agent => {
           const color = STATE_COLOR[agent.state] || STATE_COLOR.idle;
           return (
-            <div className="panel-row-item agent-card" key={agent.id}>
+            <div
+              className={`panel-row-item agent-card${onSelect ? ' clickable-row' : ''}`}
+              key={agent.id}
+              onClick={onSelect ? () => onSelect(agent) : undefined}
+            >
               <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
                 <span className="agent-card-name">{agent.label}</span>
                 <span className="agent-status-dot" style={{ background: color, boxShadow: `0 0 5px ${color}` }} />
