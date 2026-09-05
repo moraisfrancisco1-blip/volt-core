@@ -1,9 +1,34 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import smtplib
 import socket
+import threading
 from email.message import EmailMessage
+
+# Railway's network only routes IPv4 -- if the SMTP host's DNS record also has an AAAA
+# entry, the stdlib's default dual-stack resolution can hand smtplib an unroutable IPv6
+# address ("Network is unreachable"). Forcing getaddrinfo to IPv4-only for the duration
+# of the connection fixes this without resolving the hostname ourselves, which would
+# break TLS server-hostname verification in starttls() (the certificate is issued for
+# the domain, not the IP). Scoped with a lock since this mutates process-global state.
+_ipv4_only_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _force_ipv4_resolution():
+    original_getaddrinfo = socket.getaddrinfo
+
+    def _ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+        return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+    with _ipv4_only_lock:
+        socket.getaddrinfo = _ipv4_only
+        try:
+            yield
+        finally:
+            socket.getaddrinfo = original_getaddrinfo
 
 
 def send_email(to_address: str, subject: str, body: str) -> bool:
@@ -27,7 +52,7 @@ def send_email(to_address: str, subject: str, body: str) -> bool:
     message.set_content(body)
 
     try:
-        with smtplib.SMTP(host, port, timeout=15) as client:
+        with _force_ipv4_resolution(), smtplib.SMTP(host, port, timeout=15) as client:
             client.starttls()
             client.login(user, password)
             client.send_message(message)

@@ -73,3 +73,32 @@ def test_send_email_returns_false_on_smtp_failure(monkeypatch):
     monkeypatch.setattr(smtp_client.smtplib, "SMTP", _FailingSMTP)
 
     assert smtp_client.send_email("prospect@example.com", "Subject", "Body") is False
+
+
+def test_force_ipv4_resolution_filters_out_ipv6_results(monkeypatch):
+    import socket
+
+    fake_results = [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 587, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 587)),
+    ]
+
+    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        assert family == socket.AF_INET  # the whole point of the wrapper
+        return [r for r in fake_results if r[0] == family]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+    with smtp_client._force_ipv4_resolution():
+        results = socket.getaddrinfo("smtp.example.com", 587)
+
+    assert results == [fake_results[1]]
+
+
+def test_force_ipv4_resolution_restores_original_getaddrinfo_after_use():
+    import socket
+
+    original = socket.getaddrinfo
+    with smtp_client._force_ipv4_resolution():
+        assert socket.getaddrinfo is not original
+    assert socket.getaddrinfo is original
