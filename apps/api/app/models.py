@@ -225,6 +225,22 @@ class DealProposalRecord(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class MarketingContentRecord(Base):
+    __tablename__ = "marketing_content"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_type: Mapped[str] = mapped_column(String(32), index=True)  # "blog_post" | "social_post"
+    format: Mapped[str] = mapped_column(String(32))  # "blog" | "linkedin_post" | "twitter_post" | "instagram_carousel"
+    audience: Mapped[str] = mapped_column(String(32))  # "consumer" | "b2b_partner" | "both"
+    parent_content_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    body: Mapped[str] = mapped_column(Text)
+    source_facts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending_approval", index=True)
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class TelegramScheduleRecord(Base):
     __tablename__ = "telegram_schedules"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
