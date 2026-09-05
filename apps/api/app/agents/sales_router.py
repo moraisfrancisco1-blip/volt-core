@@ -9,7 +9,7 @@ from .. import llm_client
 from ..auth import Principal, authenticate, require_scope
 from ..db import session_scope
 from ..models import AuditRecord, SalesLeadRecord, SalesOutreachDraftRecord
-from . import sales_agent, smtp_client
+from . import resend_client, sales_agent
 
 router = APIRouter(prefix="/api", tags=["sales"])
 
@@ -152,7 +152,7 @@ def get_sales_outreach_draft(draft_id: int) -> dict:
 
 @router.post("/sales-outreach-drafts/{draft_id}/approve-and-send")
 def approve_and_send_outreach_draft(draft_id: int) -> dict:
-    # The ONLY place in the whole app that ever calls smtp_client.send_email -- reached
+    # The ONLY place in the whole app that ever calls resend_client.send_email -- reached
     # only by an explicit human click on the dashboard's "Aprovar e Enviar" button, never
     # from the agent's own sweep. Re-checking status here (not just trusting the UI) is
     # what makes a double-click harmless instead of a double-send.
@@ -166,10 +166,10 @@ def approve_and_send_outreach_draft(draft_id: int) -> dict:
         if lead is None:
             raise HTTPException(status_code=404, detail="sales lead for this draft not found")
 
-        sent = smtp_client.send_email(lead.email, draft.subject, draft.body)
+        sent = resend_client.send_email(lead.email, draft.subject, draft.body)
         draft.status = "approved_sent" if sent else "send_failed"
         draft.approved_at = datetime.now(timezone.utc)
         if not sent:
-            draft.error = "SMTP send failed or not configured -- check SMTP_* variables"
+            draft.error = "Resend send failed or not configured -- check RESEND_API_KEY/RESEND_FROM"
         session.add(AuditRecord(type="sales_outreach_approved_and_sent" if sent else "sales_outreach_send_failed", reference_id=str(draft_id)))
         return draft_dict(draft)

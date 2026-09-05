@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.agents import sales_agent, smtp_client
+from app.agents import sales_agent, resend_client
 from app.db import session_scope
 from app.main import app
 from app.models import SalesLeadRecord, SalesOutreachDraftRecord
@@ -136,7 +136,7 @@ def test_approve_and_send_calls_smtp_exactly_once_and_marks_sent(monkeypatch):
     lead_id = _seed_lead(email="approve-send-test@example.com")
     draft_id = _seed_draft(lead_id, subject="Parceria VoltarisOS", body="Corpo real.")
     calls = []
-    monkeypatch.setattr(smtp_client, "send_email", lambda to, subject, body: calls.append((to, subject, body)) or True)
+    monkeypatch.setattr(resend_client, "send_email", lambda to, subject, body: calls.append((to, subject, body)) or True)
 
     with TestClient(app) as client:
         response = client.post(f"/api/sales-outreach-drafts/{draft_id}/approve-and-send")
@@ -151,7 +151,7 @@ def test_approve_and_send_calls_smtp_exactly_once_and_marks_sent(monkeypatch):
 def test_approve_and_send_marks_send_failed_when_smtp_fails(monkeypatch):
     lead_id = _seed_lead(email="approve-fail-test@example.com")
     draft_id = _seed_draft(lead_id)
-    monkeypatch.setattr(smtp_client, "send_email", lambda to, subject, body: False)
+    monkeypatch.setattr(resend_client, "send_email", lambda to, subject, body: False)
 
     with TestClient(app) as client:
         response = client.post(f"/api/sales-outreach-drafts/{draft_id}/approve-and-send")
@@ -165,7 +165,7 @@ def test_approve_and_send_is_idempotent_against_double_click(monkeypatch):
     lead_id = _seed_lead(email="double-click-test@example.com")
     draft_id = _seed_draft(lead_id)
     calls = []
-    monkeypatch.setattr(smtp_client, "send_email", lambda to, subject, body: calls.append(1) or True)
+    monkeypatch.setattr(resend_client, "send_email", lambda to, subject, body: calls.append(1) or True)
 
     with TestClient(app) as client:
         first = client.post(f"/api/sales-outreach-drafts/{draft_id}/approve-and-send")
