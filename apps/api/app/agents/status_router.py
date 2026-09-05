@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AgentInvestigationRecord, AuditRecord, DealProposalRecord, DealRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, SalesLeadRecord, SalesOutreachDraftRecord
-from . import agent_inbox, deals_agent, market_intelligence, production_monitor, sales_agent
+from ..models import AgentInvestigationRecord, AuditRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import agent_inbox, deals_agent, market_intelligence, marketing_agent, production_monitor, sales_agent
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -120,6 +120,25 @@ def agents_status() -> list[dict]:
             "state": deals_state,
             "last_activity_at": _iso(deals_activity),
             "last_status": "failed" if deals_state == "error" else ("completed" if deals_activity else None),
+        })
+
+        # Marketing mirrors Sales/Deals' audit-based status.
+        marketing_audit_latest = session.scalar(
+            select(AuditRecord).where(AuditRecord.type.like("marketing_%")).order_by(AuditRecord.id.desc())
+        )
+        content_latest = session.scalar(select(MarketingContentRecord).order_by(MarketingContentRecord.id.desc()))
+        marketing_activity = content_latest.created_at if content_latest else None
+        if marketing_agent.is_sweep_in_progress():
+            marketing_state = "working"
+        elif marketing_audit_latest is not None and marketing_audit_latest.type.endswith("_failed"):
+            marketing_state = "error"
+        else:
+            marketing_state = "idle"
+        results.append({
+            "agent": "marketing",
+            "state": marketing_state,
+            "last_activity_at": _iso(marketing_activity),
+            "last_status": "failed" if marketing_state == "error" else ("completed" if marketing_activity else None),
         })
 
         return results

@@ -12,11 +12,13 @@ from .agents.production_monitor import start_production_monitor
 from .agents.market_intelligence import start_market_intelligence
 from .agents.sales_agent import start_sales_agent
 from .agents.deals_agent import start_deals_agent
+from .agents.marketing_agent import start_marketing_agent
 from .agents.telegram_scheduler import start_telegram_scheduler
 from .agents.production_monitor_router import router as monitoring_sweeps_router
 from .agents.market_intelligence_router import router as market_intelligence_router
 from .agents.sales_router import router as sales_router
 from .agents.deals_router import router as deals_router
+from .agents.marketing_router import router as marketing_router
 from .agents.router import router as investigations_router
 from .agents.status_router import router as agent_status_router
 from .integrations_router import VOLT_CORS_ORIGINS, router as integrations_status_router
@@ -36,6 +38,7 @@ app.include_router(monitoring_sweeps_router)
 app.include_router(market_intelligence_router)
 app.include_router(sales_router)
 app.include_router(deals_router)
+app.include_router(marketing_router)
 app.include_router(agent_status_router)
 app.include_router(integrations_status_router)
 app.include_router(telegram_router)
@@ -43,7 +46,7 @@ voice_provider = get_voice_provider()
 
 @app.on_event("startup")
 def startup() -> None:
-    bootstrap_admin(); start_monitoring(); run_controlled_self_test(); start_agent_inbox_worker(); start_production_monitor(); start_market_intelligence(); start_sales_agent(); start_deals_agent(); start_telegram_scheduler()
+    bootstrap_admin(); start_monitoring(); run_controlled_self_test(); start_agent_inbox_worker(); start_production_monitor(); start_market_intelligence(); start_sales_agent(); start_deals_agent(); start_marketing_agent(); start_telegram_scheduler()
 
 class Priority(str, Enum): P1 = "P1"; P2 = "P2"; P3 = "P3"; P4 = "P4"
 LEVEL_PRIORITY = {"CRITICAL": Priority.P1, "ERROR": Priority.P2, "WARNING": Priority.P3, "INFO": Priority.P4}
