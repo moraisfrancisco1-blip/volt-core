@@ -4,10 +4,10 @@ from app.agents import smtp_client
 
 
 def test_send_email_returns_false_without_credentials(monkeypatch):
-    monkeypatch.delenv("VOLT_SMTP_HOST", raising=False)
-    monkeypatch.delenv("VOLT_SMTP_USER", raising=False)
-    monkeypatch.delenv("VOLT_SMTP_PASSWORD", raising=False)
-    monkeypatch.delenv("VOLT_SMTP_FROM", raising=False)
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_USER", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
 
     def spy(*args, **kwargs):
         raise AssertionError("smtplib.SMTP must not be constructed without full credentials")
@@ -40,10 +40,10 @@ class _FakeSMTP:
 
 
 def _configure_smtp_env(monkeypatch):
-    monkeypatch.setenv("VOLT_SMTP_HOST", "smtp.example.com")
-    monkeypatch.setenv("VOLT_SMTP_USER", "bot@example.com")
-    monkeypatch.setenv("VOLT_SMTP_PASSWORD", "fake-password")
-    monkeypatch.setenv("VOLT_SMTP_FROM", "sales@example.com")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_USER", "bot@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "fake-password")
+    monkeypatch.setenv("SMTP_FROM", "sales@example.com")
 
 
 def test_send_email_success(monkeypatch):
