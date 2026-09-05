@@ -157,6 +157,45 @@ def test_get_prior_investigation_missing():
 
 # --- Central regression test: no excluded (PII / free-text) field ever leaks --------
 
+def test_list_active_prices_success(monkeypatch):
+    payload = {"data": [{
+        "id": "price_1", "unit_amount": 4900, "currency": "eur",
+        "recurring": {"interval": "month"}, "nickname": "Plano Base",
+        "product": {"id": "prod_1", "name": "VoltarisOS Home"},
+    }]}
+    monkeypatch.setattr(stripe_tools, "_stripe_request", lambda method, path, **kwargs: FakeResponse(200, payload))
+
+    result = stripe_tools.list_active_prices("STRIPE_SECRET_KEY_VOLTARISOS")
+
+    assert result["prices"][0]["id"] == "price_1"
+    assert result["prices"][0]["unit_amount"] == 4900
+    assert result["prices"][0]["recurring_interval"] == "month"
+    assert result["prices"][0]["product_name"] == "VoltarisOS Home"
+    assert result["prices"][0]["product_id"] == "prod_1"
+
+
+def test_list_active_prices_handles_unexpanded_product_id(monkeypatch):
+    payload = {"data": [{"id": "price_2", "unit_amount": 1000, "currency": "eur", "product": "prod_2"}]}
+    monkeypatch.setattr(stripe_tools, "_stripe_request", lambda method, path, **kwargs: FakeResponse(200, payload))
+
+    result = stripe_tools.list_active_prices("STRIPE_SECRET_KEY_VOLTARISOS")
+
+    assert result["prices"][0]["product_id"] == "prod_2"
+    assert result["prices"][0]["product_name"] is None
+
+
+def test_list_active_prices_network_failure(monkeypatch):
+    monkeypatch.setattr(stripe_tools, "_stripe_request", lambda method, path, **kwargs: None)
+    result = stripe_tools.list_active_prices("STRIPE_SECRET_KEY_VOLTARISOS")
+    assert "network/transport error" in result["error"]
+
+
+def test_list_active_prices_http_error(monkeypatch):
+    monkeypatch.setattr(stripe_tools, "_stripe_request", lambda method, path, **kwargs: FakeResponse(401, {}))
+    result = stripe_tools.list_active_prices("STRIPE_SECRET_KEY_VOLTARISOS")
+    assert result == {"error": "Stripe API returned 401"}
+
+
 _POISONED_CHARGE = {
     "id": "ch_poison", "status": "failed", "amount": 100, "currency": "eur", "created": 1700000000,
     "description": "MARKER_DESCRIPTION_TEXT",
@@ -197,6 +236,12 @@ _POISONED_SUBSCRIPTION = {
     "metadata": {"note": "MARKER_SUB_METADATA"},
 }
 
+_POISONED_PRICE = {
+    "id": "price_poison", "unit_amount": 100, "currency": "eur",
+    "metadata": {"note": "MARKER_PRICE_METADATA"},
+    "product": {"id": "prod_poison", "name": "Plan", "metadata": {"note": "MARKER_PRODUCT_METADATA"}},
+}
+
 _MARKERS = [
     "MARKER_DESCRIPTION_TEXT", "MARKER_RECEIPT_EMAIL", "MARKER_RECEIPT_URL", "MARKER_METADATA_TEXT",
     "MARKER_BILLING_NAME", "MARKER_BILLING_EMAIL", "MARKER_LAST4", "MARKER_SELLER_MESSAGE",
@@ -204,6 +249,7 @@ _MARKERS = [
     "MARKER_BILLING_ADDRESS", "MARKER_SHIPPING_ADDRESS", "MARKER_DISPUTE_METADATA",
     "MARKER_STATEMENT_DESCRIPTOR", "MARKER_PAYOUT_METADATA", "MARKER_CANCELLATION_COMMENT",
     "MARKER_PRICE_NICKNAME", "MARKER_DEFAULT_PM_LAST4", "MARKER_SUB_METADATA",
+    "MARKER_PRICE_METADATA", "MARKER_PRODUCT_METADATA",
 ]
 
 
@@ -214,6 +260,7 @@ def test_no_excluded_field_ever_leaks_into_any_tool_result(monkeypatch):
             "/disputes": {"data": [_POISONED_DISPUTE]},
             "/payouts": {"data": [_POISONED_PAYOUT]},
             "/subscriptions": {"data": [_POISONED_SUBSCRIPTION]},
+            "/prices": {"data": [_POISONED_PRICE]},
         }
         return FakeResponse(200, payload_by_path[path])
 
@@ -224,6 +271,7 @@ def test_no_excluded_field_ever_leaks_into_any_tool_result(monkeypatch):
         stripe_tools.list_open_disputes(_job()),
         stripe_tools.list_recent_payouts(_job()),
         stripe_tools.list_subscriptions(_job()),
+        stripe_tools.list_active_prices("STRIPE_SECRET_KEY_VOLTARISOS"),
     ]
 
     combined = str(results)

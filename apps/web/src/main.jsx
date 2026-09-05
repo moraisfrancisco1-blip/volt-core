@@ -13,13 +13,14 @@ import InvestigationHistory from './components/InvestigationHistory.jsx';
 import IntegrationsPanel from './components/IntegrationsPanel.jsx';
 import MarketIntelligencePanel from './components/MarketIntelligencePanel.jsx';
 import SalesPanel from './components/SalesPanel.jsx';
+import DealsPanel from './components/DealsPanel.jsx';
 
 const API = (import.meta.env.VITE_API_URL || 'https://api-production-c073.up.railway.app').replace(/\/$/, '');
 const INVESTIGATIONS_FETCH_LIMIT = 100;
 
 // Mirrors each reactive agent's investigation_type -- kept in sync manually with the
 // backend (apps/api/app/agents/*_runner.py and agents/status_router.py).
-const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales'];
+const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals'];
 const AGENT_LABELS = {
   volt: ['VOLT', 'voice_call_failure'],
   dev_debug: ['DEV/DEBUG', 'code_diagnosis'],
@@ -28,6 +29,7 @@ const AGENT_LABELS = {
   production_monitor: ['PRODUCTION MONITOR', null],
   market_intelligence: ['INTELIGÊNCIA DE MERCADO', null],
   sales: ['SALES', null],
+  deals: ['DEALS', null],
 };
 
 function truncate(text, max = 60) {
@@ -53,6 +55,8 @@ function App() {
   const [marketIntelReports, setMarketIntelReports] = useState([]);
   const [salesLeads, setSalesLeads] = useState([]);
   const [salesDrafts, setSalesDrafts] = useState([]);
+  const [deals, setDeals] = useState([]);
+  const [dealProposals, setDealProposals] = useState([]);
   const [agentsStatus, setAgentsStatus] = useState([]);
   const [integrationsStatus, setIntegrationsStatus] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -62,7 +66,7 @@ function App() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
@@ -71,6 +75,8 @@ function App() {
         fetch(`${API}/api/market-intelligence-reports?limit=10`, { cache: 'no-store' }),
         fetch(`${API}/api/sales-leads?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/sales-outreach-drafts?limit=20`, { cache: 'no-store' }),
+        fetch(`${API}/api/deals?limit=50`, { cache: 'no-store' }),
+        fetch(`${API}/api/deal-proposals?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/agents/status`, { cache: 'no-store' }),
         fetch(`${API}/api/integrations/status`, { cache: 'no-store' }),
       ]);
@@ -82,6 +88,8 @@ function App() {
       if (!marketIntelResponse.ok) throw new Error(`market intelligence reports unavailable (${marketIntelResponse.status})`);
       if (!salesLeadsResponse.ok) throw new Error(`sales leads unavailable (${salesLeadsResponse.status})`);
       if (!salesDraftsResponse.ok) throw new Error(`sales outreach drafts unavailable (${salesDraftsResponse.status})`);
+      if (!dealsResponse.ok) throw new Error(`deals unavailable (${dealsResponse.status})`);
+      if (!dealProposalsResponse.ok) throw new Error(`deal proposals unavailable (${dealProposalsResponse.status})`);
       if (!agentsStatusResponse.ok) throw new Error(`agent status unavailable (${agentsStatusResponse.status})`);
       if (!integrationsStatusResponse.ok) throw new Error(`integrations status unavailable (${integrationsStatusResponse.status})`);
       setDashboard(await dashboardResponse.json());
@@ -92,6 +100,8 @@ function App() {
       setMarketIntelReports(await marketIntelResponse.json());
       setSalesLeads(await salesLeadsResponse.json());
       setSalesDrafts(await salesDraftsResponse.json());
+      setDeals(await dealsResponse.json());
+      setDealProposals(await dealProposalsResponse.json());
       setAgentsStatus(await agentsStatusResponse.json());
       setIntegrationsStatus(await integrationsStatusResponse.json());
     } catch (err) {
@@ -127,6 +137,9 @@ function App() {
     } else if (agentId === 'sales') {
       const latestLead = salesLeads[0];
       lastActivityText = latestLead ? truncate(latestLead.qualification_summary || `${latestLead.name} (${latestLead.status})`) : '';
+    } else if (agentId === 'deals') {
+      const latestDeal = deals[0];
+      lastActivityText = latestDeal ? truncate(`Deal #${latestDeal.id} — ${latestDeal.stage}`) : '';
     } else {
       const latest = (investigationsByType[investigationType] || [])[0];
       lastActivityText = latest ? truncate((latest.status === 'failed' ? latest.error : latest.hypothesis) || 'sem resumo') : '';
@@ -214,6 +227,16 @@ function App() {
               drafts={salesDrafts}
               apiBase={API}
               onDraftUpdated={updated => setSalesDrafts(prev => prev.map(d => (d.id === updated.id ? updated : d)))}
+            />
+          </div>
+
+          <div className="row-4">
+            <DealsPanel
+              deals={deals}
+              proposals={dealProposals}
+              apiBase={API}
+              onProposalUpdated={updated => setDealProposals(prev => prev.map(p => (p.id === updated.id ? updated : p)))}
+              onDealUpdated={updated => setDeals(prev => prev.map(d => (d.id === updated.id ? updated : d)))}
             />
           </div>
 

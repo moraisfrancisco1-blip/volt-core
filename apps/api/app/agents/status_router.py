@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AgentInvestigationRecord, AuditRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, SalesLeadRecord, SalesOutreachDraftRecord
-from . import agent_inbox, market_intelligence, production_monitor, sales_agent
+from ..models import AgentInvestigationRecord, AuditRecord, DealProposalRecord, DealRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import agent_inbox, deals_agent, market_intelligence, production_monitor, sales_agent
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -97,6 +97,29 @@ def agents_status() -> list[dict]:
             "state": sales_state,
             "last_activity_at": _iso(sales_activity),
             "last_status": "failed" if sales_state == "error" else ("completed" if sales_activity else None),
+        })
+
+        # Deals mirrors Sales' audit-based status (many deals/proposals touched per
+        # sweep, no single "last sweep" record).
+        deals_audit_latest = session.scalar(
+            select(AuditRecord).where(AuditRecord.type.like("deal%")).order_by(AuditRecord.id.desc())
+        )
+        deal_latest = session.scalar(select(DealRecord).order_by(DealRecord.id.desc()))
+        proposal_latest = session.scalar(select(DealProposalRecord).order_by(DealProposalRecord.id.desc()))
+        deal_activity = deal_latest.stage_changed_at if deal_latest else None
+        proposal_activity = proposal_latest.created_at if proposal_latest else None
+        deals_activity = max((t for t in (deal_activity, proposal_activity) if t is not None), default=None)
+        if deals_agent.is_sweep_in_progress():
+            deals_state = "working"
+        elif deals_audit_latest is not None and deals_audit_latest.type.endswith("_failed"):
+            deals_state = "error"
+        else:
+            deals_state = "idle"
+        results.append({
+            "agent": "deals",
+            "state": deals_state,
+            "last_activity_at": _iso(deals_activity),
+            "last_status": "failed" if deals_state == "error" else ("completed" if deals_activity else None),
         })
 
         return results

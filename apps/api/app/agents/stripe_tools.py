@@ -194,6 +194,36 @@ def get_prior_investigation(job: FinanceJob) -> dict:
         }
 
 
+def list_active_prices(stripe_key_env_var: str, limit: int = 20) -> dict:
+    # Not a FinanceJob-based tool -- called directly by the Deals agent to price a
+    # proposal, the same way market_intelligence.py calls entsoe_client directly rather
+    # than through a tool-use loop. Takes the key env var name directly since this
+    # agent has no investigation context to build a FinanceJob from.
+    limit = max(1, min(int(limit), 100))
+    response = _stripe_request(
+        "GET", "/prices", api_key_env_var=stripe_key_env_var,
+        params={"active": "true", "limit": limit, "expand[]": "data.product"},
+    )
+    if response is None:
+        return {"error": "Stripe API request failed (network/transport error)"}
+    if response.status_code != 200:
+        return {"error": f"Stripe API returned {response.status_code}"}
+    prices = []
+    for p in response.json().get("data", []):
+        product = p.get("product") if isinstance(p.get("product"), dict) else {}
+        recurring = p.get("recurring") or {}
+        prices.append({
+            "id": p.get("id"),
+            "unit_amount": p.get("unit_amount"),
+            "currency": p.get("currency"),
+            "recurring_interval": recurring.get("interval"),
+            "nickname": p.get("nickname"),
+            "product_name": product.get("name"),
+            "product_id": p.get("product") if isinstance(p.get("product"), str) else product.get("id"),
+        })
+    return {"prices": prices}
+
+
 # Read-only. Every handler above returns a strict field allowlist, never the raw Stripe
 # payload -- this account holds real financial and customer data for a real business.
 # See stripe_tools' tests for the regression guard: no excluded (PII / free-text) field
