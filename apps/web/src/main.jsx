@@ -15,6 +15,14 @@ import MarketIntelligencePanel from './components/MarketIntelligencePanel.jsx';
 import SalesPanel from './components/SalesPanel.jsx';
 import DealsPanel from './components/DealsPanel.jsx';
 import MarketingPanel from './components/MarketingPanel.jsx';
+import DetailModal from './components/DetailModal.jsx';
+import VoltCoreView from './components/views/VoltCoreView.jsx';
+import AgentsView from './components/views/AgentsView.jsx';
+import EscalationsView from './components/views/EscalationsView.jsx';
+import EventsView from './components/views/EventsView.jsx';
+import IntegrationsView from './components/views/IntegrationsView.jsx';
+import DeploymentsView from './components/views/DeploymentsView.jsx';
+import SettingsView from './components/views/SettingsView.jsx';
 
 const API = (import.meta.env.VITE_API_URL || 'https://api-production-c073.up.railway.app').replace(/\/$/, '');
 const INVESTIGATIONS_FETCH_LIMIT = 100;
@@ -49,6 +57,8 @@ function useClock() {
 }
 
 function App() {
+  const [view, setView] = useState('dashboard');
+  const [selectedDetail, setSelectedDetail] = useState(null);
   const [dashboard, setDashboard] = useState(null);
   const [events, setEvents] = useState([]);
   const [escalations, setEscalations] = useState([]);
@@ -162,6 +172,161 @@ function App() {
 
   const systemOk = (dashboard?.core === 'online') && activeCritical.length === 0;
 
+  // --- Detail modal builders -- one per record type, all data already in state ---
+  const openEventDetail = item => setSelectedDetail({
+    title: item.title || item.message,
+    fields: [
+      { label: 'ID', value: item.id }, { label: 'Sistema', value: item.system_id || item.system },
+      { label: 'Prioridade', value: item.priority }, { label: 'Estado', value: item.status },
+      { label: 'Tipo', value: item.event_type }, { label: 'Mensagem', value: item.message },
+      { label: 'Ação recomendada', value: item.recommended_action },
+      { label: 'Recebido em', value: item.received_at || item.created_at },
+    ],
+  });
+  const openEscalationDetail = item => setSelectedDetail({
+    title: `${item.system} — ${item.action}`,
+    fields: [
+      { label: 'ID', value: item.id }, { label: 'Evento', value: item.event_id },
+      { label: 'Prioridade', value: item.priority }, { label: 'Estado', value: item.status },
+      { label: 'Tentativas de chamada', value: item.call_attempts }, { label: 'SLA (min)', value: item.sla_minutes },
+      { label: 'Prazo', value: item.due_at }, { label: 'Fora do prazo', value: item.overdue ? 'sim' : 'não' },
+    ],
+  });
+  const openInvestigationDetail = item => setSelectedDetail({
+    title: `${item.investigation_type} — ${item.system}`,
+    fields: [
+      { label: 'ID', value: item.id }, { label: 'Estado', value: item.status },
+      { label: 'Hipótese', value: item.hypothesis }, { label: 'Próximo passo', value: item.recommended_next_step },
+      { label: 'Confiança', value: item.confidence }, { label: 'Padrão conhecido', value: item.is_known_pattern == null ? '—' : (item.is_known_pattern ? 'sim' : 'não') },
+      { label: 'Erro', value: item.error }, { label: 'Concluída em', value: item.completed_at },
+    ],
+  });
+  const openLeadDetail = item => setSelectedDetail({
+    title: item.name,
+    fields: [
+      { label: 'Tipo', value: item.lead_type }, { label: 'Estado', value: item.status },
+      { label: 'Email', value: item.email }, { label: 'Empresa', value: item.company },
+      { label: 'Fit', value: item.fit_score }, { label: 'Resumo de qualificação', value: item.qualification_summary },
+      { label: 'Próximo passo sugerido', value: item.suggested_next_step }, { label: 'Contexto', value: item.context },
+    ],
+  });
+  const openDealDetail = item => setSelectedDetail({
+    title: `Deal #${item.id}`,
+    fields: [
+      { label: 'Estágio', value: item.stage }, { label: 'Lead', value: item.lead_id },
+      { label: 'Sugestão de fecho', value: item.suggested_stage }, { label: 'Razão da sugestão', value: item.suggested_stage_reason },
+      { label: 'Parado', value: item.stale ? 'sim' : 'não' }, { label: 'Estágio mudou em', value: item.stage_changed_at },
+    ],
+  });
+  const openContentDetail = item => setSelectedDetail({
+    title: item.title,
+    fields: [
+      { label: 'Tipo', value: item.content_type }, { label: 'Formato', value: item.format },
+      { label: 'Audiência', value: item.audience }, { label: 'Estado', value: item.status },
+      { label: 'Fontes', value: item.source_facts }, { label: 'Variante de', value: item.parent_content_id },
+      { label: 'Corpo', value: item.body },
+    ],
+  });
+
+  const triggerInvestigationViaPrompt = async () => {
+    const systemId = window.prompt('Nome do sistema a investigar:');
+    if (!systemId) return;
+    try {
+      const response = await fetch(`${API}/api/investigations/trigger-manual`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ system_id: systemId }),
+      });
+      if (response.ok) load();
+    } catch { /* footer CTA has no inline error state -- silent failure is acceptable here */ }
+  };
+
+  const renderMainContent = () => {
+    if (view === 'volt-core') {
+      return (
+        <VoltCoreView
+          investigations={investigations} twilioConfigured={twilioConfigured} agentsStatus={agentsStatus}
+          systemOk={systemOk} events={events} fetchLimit={INVESTIGATIONS_FETCH_LIMIT} onSelectEvent={openEventDetail}
+        />
+      );
+    }
+    if (view === 'agents') {
+      return (
+        <AgentsView
+          agents={agentsForGrid} investigations={investigations} salesLeads={salesLeads} deals={deals} marketingContent={marketingContent}
+          onSelectInvestigation={openInvestigationDetail} onSelectLead={openLeadDetail} onSelectDeal={openDealDetail} onSelectContent={openContentDetail}
+        />
+      );
+    }
+    if (view === 'escalations') return <EscalationsView escalations={escalations} onSelect={openEscalationDetail} />;
+    if (view === 'events') return <EventsView events={events} onSelect={openEventDetail} />;
+    if (view === 'integrations') return <IntegrationsView integrations={integrationsStatus} railwayConfigured={railwayConfigured} />;
+    if (view === 'deployments') return <DeploymentsView />;
+    if (view === 'settings') return <SettingsView integrations={integrationsStatus} />;
+
+    return (
+      <>
+        <div className="row-1">
+          <SystemOverview
+            investigationCount={investigations.length}
+            twilioConfigured={twilioConfigured}
+            agentsStatus={agentsStatus}
+            systemOk={systemOk}
+            iconColor="#f0b429"
+          />
+          <CoreHero />
+          <EventFeed events={events} onSelect={openEventDetail} />
+        </div>
+
+        <div className="row-2">
+          <AgentGrid agents={agentsForGrid} onSelect={agent => setView('agents')} />
+          <EscalationQueue escalations={activeEscalations} onSelect={openEscalationDetail} />
+          <QuickCommands apiBase={API} systems={dashboard?.systems} onInvestigationTriggered={load} />
+        </div>
+
+        <div className="row-3">
+          <SystemMonitor railwayConfigured={railwayConfigured} />
+          <InvestigationHistory investigations={investigations} fetchLimit={INVESTIGATIONS_FETCH_LIMIT} />
+          <IntegrationsPanel integrations={integrationsStatus} />
+        </div>
+
+        <div className="row-4">
+          <MarketIntelligencePanel reports={marketIntelReports} />
+        </div>
+
+        <div className="row-4">
+          <SalesPanel
+            leads={salesLeads}
+            drafts={salesDrafts}
+            apiBase={API}
+            onDraftUpdated={updated => setSalesDrafts(prev => prev.map(d => (d.id === updated.id ? updated : d)))}
+            onSelectLead={openLeadDetail}
+          />
+        </div>
+
+        <div className="row-4">
+          <DealsPanel
+            deals={deals}
+            proposals={dealProposals}
+            apiBase={API}
+            onProposalUpdated={updated => setDealProposals(prev => prev.map(p => (p.id === updated.id ? updated : p)))}
+            onDealUpdated={updated => setDeals(prev => prev.map(d => (d.id === updated.id ? updated : d)))}
+            onSelectDeal={openDealDetail}
+          />
+        </div>
+
+        <div className="row-4">
+          <MarketingPanel
+            content={marketingContent}
+            performance={marketingPerformance}
+            apiBase={API}
+            onContentUpdated={updated => setMarketingContent(prev => prev.map(c => (c.id === updated.id ? updated : c)))}
+            onRepurposeRequested={() => setTimeout(load, 4000)}
+            onSelectContent={openContentDetail}
+          />
+        </div>
+      </>
+    );
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -203,65 +368,10 @@ function App() {
       </header>
 
       <div className="body-row">
-        <Sidebar twilioConfigured={twilioConfigured} />
+        <Sidebar twilioConfigured={twilioConfigured} activeView={view} onNavigate={setView} apiBase={API} />
 
         <div className="main-content">
-          <div className="row-1">
-            <SystemOverview
-              investigationCount={investigations.length}
-              twilioConfigured={twilioConfigured}
-              agentsStatus={agentsStatus}
-              systemOk={systemOk}
-              iconColor="#f0b429"
-            />
-            <CoreHero />
-            <EventFeed events={events} />
-          </div>
-
-          <div className="row-2">
-            <AgentGrid agents={agentsForGrid} />
-            <EscalationQueue escalations={activeEscalations} />
-            <QuickCommands apiBase={API} />
-          </div>
-
-          <div className="row-3">
-            <SystemMonitor railwayConfigured={railwayConfigured} />
-            <InvestigationHistory investigations={investigations} fetchLimit={INVESTIGATIONS_FETCH_LIMIT} />
-            <IntegrationsPanel integrations={integrationsStatus} />
-          </div>
-
-          <div className="row-4">
-            <MarketIntelligencePanel reports={marketIntelReports} />
-          </div>
-
-          <div className="row-4">
-            <SalesPanel
-              leads={salesLeads}
-              drafts={salesDrafts}
-              apiBase={API}
-              onDraftUpdated={updated => setSalesDrafts(prev => prev.map(d => (d.id === updated.id ? updated : d)))}
-            />
-          </div>
-
-          <div className="row-4">
-            <DealsPanel
-              deals={deals}
-              proposals={dealProposals}
-              apiBase={API}
-              onProposalUpdated={updated => setDealProposals(prev => prev.map(p => (p.id === updated.id ? updated : p)))}
-              onDealUpdated={updated => setDeals(prev => prev.map(d => (d.id === updated.id ? updated : d)))}
-            />
-          </div>
-
-          <div className="row-4">
-            <MarketingPanel
-              content={marketingContent}
-              performance={marketingPerformance}
-              apiBase={API}
-              onContentUpdated={updated => setMarketingContent(prev => prev.map(c => (c.id === updated.id ? updated : c)))}
-              onRepurposeRequested={() => setTimeout(load, 4000)}
-            />
-          </div>
+          {renderMainContent()}
 
           <div className="row footer-row">
             <div className="row mono footer-meta">
@@ -271,13 +381,15 @@ function App() {
               <span>·</span>
               <span>{error ? 'Erro na última atualização' : loading ? 'A carregar…' : 'Atualizado agora'}</span>
             </div>
-            <div className="row footer-cta">
+            <button type="button" className="row footer-cta" style={{ border: 'none', cursor: 'pointer' }} onClick={triggerInvestigationViaPrompt}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#14100c" strokeWidth="2.2"><path d="M12 5v14M5 12h14" /></svg>
               <span className="mono footer-cta-text">NOVA INVESTIGAÇÃO</span>
-            </div>
+            </button>
           </div>
         </div>
       </div>
+
+      <DetailModal detail={selectedDetail} onClose={() => setSelectedDetail(null)} />
     </div>
   );
 }

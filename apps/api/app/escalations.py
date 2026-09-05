@@ -45,7 +45,7 @@ def queue_escalation(session, event: EventRecord) -> EscalationRecord:
     record = EscalationRecord(event_id=event.id, system=event.system, priority=event.priority, action=event.recommended_action, status="queued")
     session.add(record); session.flush(); session.add(AuditRecord(type="escalation_queued", reference_id=str(record.id), detail=f"event={event.id} priority={record.priority} action={record.action} sla={SLA_MINUTES.get(record.priority, 240)}m")); return record
 
-def trigger_manual_investigation(session, system_id: str, environment: str = "production") -> tuple[EventRecord, EscalationRecord]:
+def trigger_manual_investigation(session, system_id: str, environment: str = "production", source: str = "Telegram") -> tuple[EventRecord, EscalationRecord]:
     # Never goes through create_event/decide_event/dispatch_voice_call -- this isn't a
     # real incident, it must never place a real Twilio call or duplicate the Telegram
     # notification create_event already sends for genuine events. Builds the minimal
@@ -53,9 +53,9 @@ def trigger_manual_investigation(session, system_id: str, environment: str = "pr
     record = EventRecord(
         system=system_id, system_id=system_id, system_name=system_id, environment=environment,
         level="INFO", severity="info", priority="P3", event_type="manual_investigation_request",
-        title="Investigação manual pedida via Telegram",
+        title=f"Investigação manual pedida via {source}",
         recommended_action="investigate",  # never "call" -- queue_escalation copies this into escalation.action
-        message=f"Investigação manual pedida via Telegram para {system_id}.", status="active",
+        message=f"Investigação manual pedida via {source} para {system_id}.", status="active",
     )
     session.add(record); session.flush()
     escalation = queue_escalation(session, record)
@@ -64,7 +64,7 @@ def trigger_manual_investigation(session, system_id: str, environment: str = "pr
         session,
         sender="escalations", recipient="volt", message_type="voice_call_failure",
         payload={"event_id": record.id, "escalation_id": escalation.id, "system": system_id, "environment": environment, "priority": record.priority},
-        content=f"@volt investigate {system_id} ({environment}) — manual investigation requested via Telegram",
+        content=f"@volt investigate {system_id} ({environment}) — manual investigation requested via {source}",
     )
     return record, escalation
 

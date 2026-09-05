@@ -11,8 +11,8 @@ const STATE_MAP = {
   cancelled: { label: 'CANCELADO', color: '#7d7062' },
 };
 
-function EscalationQueue({ escalations }) {
-  const items = escalations.slice(0, 8);
+function EscalationQueue({ escalations, limit = 8, onSelect }) {
+  const items = limit ? escalations.slice(0, limit) : escalations;
   return (
     <div className="panel queue-panel">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
@@ -25,7 +25,11 @@ function EscalationQueue({ escalations }) {
           : items.map(item => {
               const state = STATE_MAP[item.status] || { label: (item.status || '—').toUpperCase(), color: '#7d7062' };
               return (
-                <div className="row queue-row" key={item.id}>
+                <div
+                  className={`row queue-row${onSelect ? ' clickable-row' : ''}`}
+                  key={item.id}
+                  onClick={onSelect ? () => onSelect(item) : undefined}
+                >
                   <div className="row" style={{ gap: 8 }}>
                     <span className="mono queue-level" style={{ color: LEVEL_COLOR[item.priority] || '#8a9bd8' }}>{item.priority}</span>
                     <span className="queue-text">{item.system} — {item.action}</span>

@@ -19,8 +19,8 @@ function eventTag(event) {
   return { tag: (event.severity || 'INFO').toUpperCase(), color: '#8a9bd8' };
 }
 
-function EventFeed({ events }) {
-  const items = events.slice(0, 6);
+function EventFeed({ events, limit = 6, onSelect }) {
+  const items = limit ? events.slice(0, limit) : events;
   return (
     <div className="panel event-feed-panel">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
@@ -36,7 +36,12 @@ function EventFeed({ events }) {
           : items.map(event => {
               const { tag, color } = eventTag(event);
               return (
-                <div className="feed-item" style={{ borderLeftColor: color }} key={event.id}>
+                <div
+                  className={`feed-item${onSelect ? ' clickable-row' : ''}`}
+                  style={{ borderLeftColor: color }}
+                  key={event.id}
+                  onClick={onSelect ? () => onSelect(event) : undefined}
+                >
                   <div className="row" style={{ justifyContent: 'space-between' }}>
                     <span className="mono feed-item-tag" style={{ color }}>{tag}</span>
                     <span className="mono feed-item-time">{timeAgo(event.received_at || event.created_at)}</span>

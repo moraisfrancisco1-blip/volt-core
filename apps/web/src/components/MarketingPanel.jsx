@@ -7,7 +7,7 @@ const FORMAT_LABEL = {
   instagram_carousel: 'INSTAGRAM',
 };
 
-function ContentRow({ content, apiBase, onUpdated, onRepurposed }) {
+function ContentRow({ content, apiBase, onUpdated, onRepurposed, onSelect }) {
   const [approveState, setApproveState] = useState('idle'); // idle | approving | done | error
   const [repurposeState, setRepurposeState] = useState('idle'); // idle | running | done | error
 
@@ -44,7 +44,7 @@ function ContentRow({ content, apiBase, onUpdated, onRepurposed }) {
   return (
     <div className="panel-row-item" style={{ padding: 12, marginBottom: 8 }}>
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
-        <span className="agent-card-name">{content.title}</span>
+        <span className={`agent-card-name${onSelect ? ' clickable-row' : ''}`} onClick={onSelect ? () => onSelect(content) : undefined}>{content.title}</span>
         <span className="mono feed-item-time">{content.status === 'pending_approval' ? 'pendente de aprovação' : 'aprovado'}</span>
       </div>
       <div className="row" style={{ gap: 8, marginBottom: 6 }}>
@@ -81,7 +81,7 @@ function ContentRow({ content, apiBase, onUpdated, onRepurposed }) {
   );
 }
 
-function MarketingPanel({ content, performance, apiBase, onContentUpdated, onRepurposeRequested }) {
+function MarketingPanel({ content, performance, apiBase, onContentUpdated, onRepurposeRequested, onSelectContent }) {
   const items = (content || []).slice(0, 6);
 
   return (
@@ -98,6 +98,7 @@ function MarketingPanel({ content, performance, apiBase, onContentUpdated, onRep
               apiBase={apiBase}
               onUpdated={onContentUpdated}
               onRepurposed={onRepurposeRequested}
+              onSelect={onSelectContent}
               key={item.id}
             />
           ))}

@@ -45,9 +45,13 @@ function DraftRow({ draft, apiBase, onUpdated }) {
   );
 }
 
-function LeadRow({ lead }) {
+function LeadRow({ lead, onSelect }) {
   return (
-    <div className="feed-item" style={{ borderLeftColor: '#f0b429' }}>
+    <div
+      className={`feed-item${onSelect ? ' clickable-row' : ''}`}
+      style={{ borderLeftColor: '#f0b429' }}
+      onClick={onSelect ? () => onSelect(lead) : undefined}
+    >
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <span className="mono feed-item-tag" style={{ color: '#f0b429' }}>{LEAD_TYPE_LABEL[lead.lead_type] || lead.lead_type}</span>
         <span className="mono feed-item-time">{lead.fit_score != null ? `fit ${Math.round(lead.fit_score * 100)}%` : '—'}</span>
@@ -57,7 +61,7 @@ function LeadRow({ lead }) {
   );
 }
 
-function SalesPanel({ leads, drafts, apiBase, onDraftUpdated }) {
+function SalesPanel({ leads, drafts, apiBase, onDraftUpdated, onSelectLead }) {
   const qualifiedLeads = (leads || []).filter(l => l.status === 'qualified').slice(0, 6);
   const pendingDrafts = (drafts || []).filter(d => d.status === 'pending_approval');
   const recentDrafts = (drafts || []).slice(0, 4);
@@ -70,7 +74,7 @@ function SalesPanel({ leads, drafts, apiBase, onDraftUpdated }) {
           <div className="mono panel-title" style={{ marginBottom: 8 }}>LEADS QUALIFICADOS</div>
           {qualifiedLeads.length === 0
             ? <div className="empty-state">Sem leads qualificados ainda.</div>
-            : <div className="feed-list">{qualifiedLeads.map(lead => <LeadRow lead={lead} key={lead.id} />)}</div>}
+            : <div className="feed-list">{qualifiedLeads.map(lead => <LeadRow lead={lead} onSelect={onSelectLead} key={lead.id} />)}</div>}
         </div>
         <div style={{ flex: 1 }}>
           <div className="mono panel-title" style={{ marginBottom: 8 }}>
