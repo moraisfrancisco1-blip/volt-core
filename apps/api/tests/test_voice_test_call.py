@@ -42,6 +42,34 @@ def test_test_call_places_a_call_and_persists_records(monkeypatch):
         assert audit is not None
 
 
+def test_test_call_degrades_gracefully_on_provider_rejection(monkeypatch):
+    # Reproduces the real production failure this test caught: Twilio's trial-account
+    # "unverified number" rejection raises TwilioRestException from place_call(), and
+    # this endpoint must never let that become a raw 500 -- same graceful-degradation
+    # contract as dispatch_voice_call in escalations.py.
+    monkeypatch.setenv("VOLT_ALERT_PHONE", "+31600000000")
+
+    class _FakeVoiceProvider:
+        def place_call(self, to, script, **kwargs):
+            raise RuntimeError("HTTP 400 error: Unable to create record: The number +31600000000 is unverified.")
+
+    monkeypatch.setattr(main_module, "voice_provider", _FakeVoiceProvider())
+
+    with TestClient(app) as client:
+        response = client.post("/api/voice/test-call")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "failed"
+        assert "unverified" in payload["error"]
+
+    with session_scope() as session:
+        call = session.get(VoiceCallRecord, payload["id"])
+        assert call is not None
+        assert call.status == "failed"
+        audit = session.scalar(select(AuditRecord).where(AuditRecord.type == "test_call_dispatch_failed"))
+        assert audit is not None
+
+
 def test_test_call_never_calls_place_call_without_alert_phone(monkeypatch):
     monkeypatch.delenv("VOLT_ALERT_PHONE", raising=False)
 

@@ -21,14 +21,15 @@ function Sidebar({ twilioConfigured, activeView, onNavigate, apiBase }) {
     setCallState('calling');
     try {
       const response = await fetch(`${apiBase}/api/voice/test-call`, { method: 'POST' });
-      setCallState(response.ok ? 'done' : 'error');
+      const payload = await response.json();
+      setCallState(response.ok && !payload.error ? 'done' : 'error');
     } catch {
       setCallState('error');
     }
     setTimeout(() => setCallState('idle'), 4000);
   };
 
-  const callLabel = callState === 'calling' ? 'A CHAMAR…' : callState === 'done' ? 'CHAMADA DISPARADA' : callState === 'error' ? 'FALHOU' : 'TESTAR CHAMADA';
+  const callLabel = callState === 'calling' ? 'A CHAMAR…' : callState === 'done' ? 'CHAMADA DISPARADA' : callState === 'error' ? 'SEM CONFIRMAÇÃO DO PROVIDER' : 'TESTAR CHAMADA';
 
   return (
     <div className="sidebar">
