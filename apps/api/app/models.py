@@ -241,6 +241,43 @@ class MarketingContentRecord(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class OnboardingRecord(Base):
+    __tablename__ = "onboardings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    deal_id: Mapped[int] = mapped_column(Integer, index=True, unique=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_progress_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OnboardingStepRecord(Base):
+    __tablename__ = "onboarding_steps"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    onboarding_id: Mapped[int] = mapped_column(Integer, index=True)
+    step_key: Mapped[str] = mapped_column(String(64))
+    order_index: Mapped[int] = mapped_column(Integer)
+    requires_activation: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)  # "pending" | "done"
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OperationsActivationRequestRecord(Base):
+    __tablename__ = "operations_activation_requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    onboarding_step_id: Mapped[int] = mapped_column(Integer, index=True, unique=True)
+    description: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending_approval", index=True)  # "pending_approval" | "approved"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RecurringTaskCheckpointRecord(Base):
+    __tablename__ = "recurring_task_checkpoints"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class TelegramScheduleRecord(Base):
     __tablename__ = "telegram_schedules"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
