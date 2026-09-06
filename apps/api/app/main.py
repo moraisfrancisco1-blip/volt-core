@@ -173,7 +173,17 @@ def dispatch_test_call() -> dict:
             recommended_action="call", message="Chamada de teste manual disparada pelo dashboard.", status="resolved",
         )
         session.add(event); session.flush()
-        result = voice_provider.place_call(to, script)
+        try:
+            result = voice_provider.place_call(to, script)
+        except Exception as exc:
+            # Same graceful-degradation as dispatch_voice_call in escalations.py -- a
+            # provider-side rejection (e.g. Twilio trial account + unverified number) is
+            # a normal, expected outcome here, not a server error the caller should see
+            # as a 500.
+            session.add(AuditRecord(type="test_call_dispatch_failed", reference_id=str(event.id), detail=str(exc)[:500]))
+            call = VoiceCallRecord(event_id=event.id, status="failed", provider="unknown", destination=to, script=script)
+            session.add(call); session.flush()
+            return call_dict(call) | {"error": str(exc)[:500]}
         call = VoiceCallRecord(event_id=event.id, status=result["status"], provider=result["provider"], destination=to, script=script)
         session.add(call); session.flush()
         session.add(AuditRecord(type="test_call_dispatched", reference_id=str(call.id), detail=result.get("sid", "")))

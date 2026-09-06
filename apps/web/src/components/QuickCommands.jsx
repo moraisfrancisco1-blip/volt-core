@@ -32,7 +32,8 @@ function QuickCommands({ apiBase, systems, onInvestigationTriggered }) {
     setCallState('calling');
     try {
       const response = await fetch(`${apiBase}/api/voice/test-call`, { method: 'POST' });
-      setCallState(response.ok ? 'done' : 'error');
+      const payload = await response.json();
+      setCallState(response.ok && !payload.error ? 'done' : 'error');
     } catch {
       setCallState('error');
     }
@@ -63,7 +64,7 @@ function QuickCommands({ apiBase, systems, onInvestigationTriggered }) {
   };
 
   const sweepLabel = sweepState === 'running' ? 'A VARRER…' : sweepState === 'done' ? 'VARREDURA DISPARADA' : sweepState === 'error' ? 'NÃO CONFIGURADO' : 'Forçar Varredura';
-  const callLabel = callState === 'calling' ? 'A CHAMAR…' : callState === 'done' ? 'CHAMADA DISPARADA' : callState === 'error' ? 'FALHOU' : 'Testar Chamada';
+  const callLabel = callState === 'calling' ? 'A CHAMAR…' : callState === 'done' ? 'CHAMADA DISPARADA' : callState === 'error' ? 'SEM CONFIRMAÇÃO DO PROVIDER' : 'Testar Chamada';
 
   return (
     <div className="panel commands-panel">
