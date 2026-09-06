@@ -8,7 +8,7 @@ const AGENT_INVESTIGATION_TYPE = {
   finance: 'finance_diagnosis',
 };
 
-function AgentsView({ agents, investigations, salesLeads, deals, marketingContent, onSelectInvestigation, onSelectLead, onSelectDeal, onSelectContent }) {
+function AgentsView({ agents, investigations, salesLeads, deals, marketingContent, onboardings, onSelectInvestigation, onSelectLead, onSelectDeal, onSelectContent, onSelectOnboarding }) {
   const [filter, setFilter] = useState(null); // agent id or null (all)
 
   const visibleAgents = filter ? agents.filter(a => a.id === filter) : agents;
@@ -26,6 +26,8 @@ function AgentsView({ agents, investigations, salesLeads, deals, marketingConten
     rows = deals.slice(0, 30).map(d => ({ key: `deal-${d.id}`, tag: d.stage, text: `Deal #${d.id}`, onClick: () => onSelectDeal(d) }));
   } else if (filter === 'marketing') {
     rows = marketingContent.slice(0, 30).map(c => ({ key: `content-${c.id}`, tag: c.format, text: c.title, onClick: () => onSelectContent(c) }));
+  } else if (filter === 'operations') {
+    rows = onboardings.slice(0, 30).map(o => ({ key: `onboarding-${o.id}`, tag: `${o.progress.done}/${o.progress.total}`, text: `Onboarding — Deal #${o.deal_id}`, onClick: () => onSelectOnboarding(o) }));
   }
 
   return (

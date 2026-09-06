@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AgentInvestigationRecord, AuditRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, SalesLeadRecord, SalesOutreachDraftRecord
-from . import agent_inbox, deals_agent, market_intelligence, marketing_agent, production_monitor, sales_agent
+from ..models import AgentInvestigationRecord, AuditRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, OnboardingRecord, OperationsActivationRequestRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import agent_inbox, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -139,6 +139,29 @@ def agents_status() -> list[dict]:
             "state": marketing_state,
             "last_activity_at": _iso(marketing_activity),
             "last_status": "failed" if marketing_state == "error" else ("completed" if marketing_activity else None),
+        })
+
+        # Operations mirrors Sales/Deals/Marketing's audit-based status (no single "last
+        # sweep" record -- many onboardings/activations touched per sweep).
+        operations_audit_latest = session.scalar(
+            select(AuditRecord).where(AuditRecord.type.like("onboarding_%") | AuditRecord.type.like("operations_%")).order_by(AuditRecord.id.desc())
+        )
+        onboarding_latest = session.scalar(select(OnboardingRecord).order_by(OnboardingRecord.id.desc()))
+        activation_latest = session.scalar(select(OperationsActivationRequestRecord).order_by(OperationsActivationRequestRecord.id.desc()))
+        onboarding_activity = onboarding_latest.last_progress_at if onboarding_latest else None
+        activation_activity = activation_latest.created_at if activation_latest else None
+        operations_activity = max((t for t in (onboarding_activity, activation_activity) if t is not None), default=None)
+        if operations_agent.is_sweep_in_progress():
+            operations_state = "working"
+        elif operations_audit_latest is not None and operations_audit_latest.type.endswith("_failed"):
+            operations_state = "error"
+        else:
+            operations_state = "idle"
+        results.append({
+            "agent": "operations",
+            "state": operations_state,
+            "last_activity_at": _iso(operations_activity),
+            "last_status": "failed" if operations_state == "error" else ("completed" if operations_activity else None),
         })
 
         return results
