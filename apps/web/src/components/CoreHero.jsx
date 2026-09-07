@@ -11,10 +11,19 @@ const CX = VIEW_W / 2, CY = VIEW_H / 2;
 const RX = 300, RY = 108;
 const RX2 = RX * 0.62, RY2 = RY * 0.62;
 
-// Fixed slot layout, evenly spaced by angle around an ellipse (wide, to fit the hero
-// panel's fixed height but flexible width) -- one slot per agent, in AGENT_ORDER's order.
-const SLOT_ANGLES = [-90, -54, -18, 18, 54, 90, 126, 162, 198, 234].map(deg => (deg * Math.PI) / 180);
-const SLOTS = SLOT_ANGLES.map(a => ({ x: CX + RX * Math.cos(a), y: CY + RY * Math.sin(a) }));
+// Slot layout, evenly spaced by angle around an ellipse (wide, to fit the hero panel's
+// fixed height but flexible width) -- one slot per agent, in AGENT_ORDER's order. Computed
+// from however many agents are actually passed in (not a fixed count), so a newly added
+// agent always gets a spoke on the hub instead of silently falling off the end of a fixed
+// slot list.
+function computeSlots(count) {
+  const slots = [];
+  for (let i = 0; i < count; i++) {
+    const angle = ((-90 + (i * 360) / count) * Math.PI) / 180;
+    slots.push({ x: CX + RX * Math.cos(angle), y: CY + RY * Math.sin(angle) });
+  }
+  return slots;
+}
 
 function ellipsePath(rx, ry) {
   return `M${CX + rx},${CY} A${rx},${ry} 0 1 1 ${CX - rx},${CY} A${rx},${ry} 0 1 1 ${CX + rx},${CY} Z`;
@@ -93,7 +102,8 @@ function CoreHero({ agents }) {
   const svgRef = useRef(null);
   useTiltParallax(panelRef, svgRef);
 
-  const nodes = SLOTS.map((slot, i) => {
+  const slots = computeSlots(agents?.length || 0);
+  const nodes = slots.map((slot, i) => {
     const agent = agents?.[i];
     const state = agent?.state && STATE_COLOR[agent.state] ? agent.state : 'idle';
     return { ...slot, label: agent?.label || '—', color: STATE_COLOR[state], state, working: state === 'working' };
