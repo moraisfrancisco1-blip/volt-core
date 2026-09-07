@@ -53,17 +53,14 @@ def _window(hours: int) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-# NOTE ON VERIFICATION STATUS: get_service_http_metrics and get_service_resource_usage
-# use a best-effort GraphQL shape modeled on Railway's own metric-name vocabulary (as
-# surfaced through Railway's MCP tooling: a "metrics" query taking measurements/
-# projectId/serviceId/environmentId/startDate/endDate/sampleRateSeconds) -- this has
-# NOT been confirmed against the live API (no raw query access was available to verify
-# it), unlike get_recent_deployments below, which matches Railway's own documented API
-# Cookbook exactly. Before relying on the first two in production, run each query once
-# with a real RAILWAY_TOKEN against https://backboard.railway.com/graphql/v2 and adjust
-# field names to match whatever comes back. Both fail closed (a GraphQL validation
-# error surfaces as a normal {"error": ...} tool result, never an exception) so a wrong
-# guess degrades to "this tool didn't work this sweep", not a crash.
+# NOTE ON VERIFICATION STATUS: both queries below are now confirmed against the live API
+# via schema introspection with a real RAILWAY_TOKEN (2026-09-07). get_service_resource_usage's
+# shape was already correct -- CPU_USAGE/MEMORY_USAGE_GB are real MetricMeasurement enum
+# values. get_service_http_metrics was NOT: the MetricMeasurement enum has no HTTP-related
+# values at all (only CPU/memory/disk/network/agent-spend) -- HTTP metrics live under their
+# own dedicated queries (httpMetricsGroupedByStatus, httpDurationMetrics), confirmed working
+# below. Both still fail closed (a GraphQL validation error surfaces as a normal
+# {"error": ...} tool result, never an exception).
 
 _METRICS_QUERY = """
 query sweepMetrics($projectId: String!, $serviceId: String!, $environmentId: String!, $measurements: [MetricMeasurement!]!, $startDate: DateTime!, $endDate: DateTime!, $sampleRateSeconds: Int) {
@@ -74,20 +71,67 @@ query sweepMetrics($projectId: String!, $serviceId: String!, $environmentId: Str
 }
 """
 
+_HTTP_METRICS_BY_STATUS_QUERY = """
+query sweepHttpMetricsByStatus($startDate: DateTime!, $endDate: DateTime!, $environmentId: String!, $serviceId: String!, $stepSeconds: Int) {
+  httpMetricsGroupedByStatus(startDate: $startDate, endDate: $endDate, environmentId: $environmentId, serviceId: $serviceId, stepSeconds: $stepSeconds) {
+    statusCode
+    samples { ts value }
+  }
+}
+"""
+
+_HTTP_DURATION_QUERY = """
+query sweepHttpDuration($startDate: DateTime!, $endDate: DateTime!, $environmentId: String!, $serviceId: String!, $stepSeconds: Int) {
+  httpDurationMetrics(startDate: $startDate, endDate: $endDate, environmentId: $environmentId, serviceId: $serviceId, stepSeconds: $stepSeconds) {
+    samples { ts p50 p90 p95 p99 }
+  }
+}
+"""
+
 
 def get_service_http_metrics(job: ProductionSweepJob, window_hours: int = 6) -> dict:
     window_hours = max(1, min(int(window_hours), 168))
     start, end = _window(window_hours)
-    payload = _railway_request(_METRICS_QUERY, {
-        "projectId": job.project_id, "serviceId": job.service_id, "environmentId": job.environment_id,
-        "measurements": ["HTTP_ERROR_RATE", "HTTP_LATENCY_P50", "HTTP_LATENCY_P95", "HTTP_LATENCY_P99"],
-        "startDate": start, "endDate": end, "sampleRateSeconds": 300,
-    })
-    error = _graphql_errors(payload)
+    variables = {
+        "startDate": start, "endDate": end,
+        "environmentId": job.environment_id, "serviceId": job.service_id,
+        "stepSeconds": 900,
+    }
+
+    status_payload = _railway_request(_HTTP_METRICS_BY_STATUS_QUERY, variables)
+    error = _graphql_errors(status_payload)
     if error:
         return {"error": error}
-    series = (payload or {}).get("data", {}).get("metrics") or []
-    return {"window_hours": window_hours, "series": series}
+
+    duration_payload = _railway_request(_HTTP_DURATION_QUERY, variables)
+    error = _graphql_errors(duration_payload)
+    if error:
+        return {"error": error}
+
+    by_status = (status_payload or {}).get("data", {}).get("httpMetricsGroupedByStatus") or []
+    total_requests = 0
+    error_requests = 0
+    for series in by_status:
+        status_code = series.get("statusCode")
+        count = sum((sample.get("value") or 0) for sample in series.get("samples") or [])
+        total_requests += count
+        if isinstance(status_code, int) and status_code >= 500:
+            error_requests += count
+    error_rate = round(error_requests / total_requests, 4) if total_requests else 0.0
+
+    duration_samples = (duration_payload or {}).get("data", {}).get("httpDurationMetrics", {}).get("samples") or []
+    latest = duration_samples[-1] if duration_samples else {}
+
+    return {
+        "window_hours": window_hours,
+        "total_requests": total_requests,
+        "error_requests": error_requests,
+        "error_rate": error_rate,
+        "latest_latency_p50_ms": latest.get("p50"),
+        "latest_latency_p90_ms": latest.get("p90"),
+        "latest_latency_p95_ms": latest.get("p95"),
+        "latest_latency_p99_ms": latest.get("p99"),
+    }
 
 
 def get_service_resource_usage(job: ProductionSweepJob, window_hours: int = 6) -> dict:
