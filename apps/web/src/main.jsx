@@ -76,6 +76,7 @@ function App() {
   const [salesDrafts, setSalesDrafts] = useState([]);
   const [deals, setDeals] = useState([]);
   const [dealProposals, setDealProposals] = useState([]);
+  const [expansionSignals, setExpansionSignals] = useState([]);
   const [marketingContent, setMarketingContent] = useState([]);
   const [marketingPerformance, setMarketingPerformance] = useState(null);
   const [onboardings, setOnboardings] = useState([]);
@@ -95,7 +96,7 @@ function App() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, expansionSignalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
@@ -106,6 +107,7 @@ function App() {
         fetch(`${API}/api/sales-outreach-drafts?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/deals?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/deal-proposals?limit=20`, { cache: 'no-store' }),
+        fetch(`${API}/api/deal-expansion-signals?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/marketing-content?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/marketing/performance`, { cache: 'no-store' }),
         fetch(`${API}/api/onboardings?limit=50`, { cache: 'no-store' }),
@@ -129,6 +131,7 @@ function App() {
       if (!salesDraftsResponse.ok) throw new Error(`sales outreach drafts unavailable (${salesDraftsResponse.status})`);
       if (!dealsResponse.ok) throw new Error(`deals unavailable (${dealsResponse.status})`);
       if (!dealProposalsResponse.ok) throw new Error(`deal proposals unavailable (${dealProposalsResponse.status})`);
+      if (!expansionSignalsResponse.ok) throw new Error(`deal expansion signals unavailable (${expansionSignalsResponse.status})`);
       if (!marketingContentResponse.ok) throw new Error(`marketing content unavailable (${marketingContentResponse.status})`);
       if (!marketingPerformanceResponse.ok) throw new Error(`marketing performance unavailable (${marketingPerformanceResponse.status})`);
       if (!onboardingsResponse.ok) throw new Error(`onboardings unavailable (${onboardingsResponse.status})`);
@@ -151,6 +154,7 @@ function App() {
       setSalesDrafts(await salesDraftsResponse.json());
       setDeals(await dealsResponse.json());
       setDealProposals(await dealProposalsResponse.json());
+      setExpansionSignals(await expansionSignalsResponse.json());
       setMarketingContent(await marketingContentResponse.json());
       setMarketingPerformance(await marketingPerformanceResponse.json());
       setOnboardings(await onboardingsResponse.json());
@@ -380,9 +384,11 @@ function App() {
           <DealsPanel
             deals={deals}
             proposals={dealProposals}
+            expansionSignals={expansionSignals}
             apiBase={API}
             onProposalUpdated={updated => setDealProposals(prev => prev.map(p => (p.id === updated.id ? updated : p)))}
             onDealUpdated={updated => setDeals(prev => prev.map(d => (d.id === updated.id ? updated : d)))}
+            onExpansionSignalUpdated={updated => setExpansionSignals(prev => prev.map(s => (s.id === updated.id ? updated : s)))}
             onSelectDeal={openDealDetail}
           />
         </div>

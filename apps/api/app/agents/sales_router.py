@@ -1,12 +1,10 @@
 import threading
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 
 from .. import llm_client
-from ..auth import Principal, authenticate, require_scope
 from ..db import session_scope
 from ..models import AuditRecord, SalesLeadRecord, SalesOutreachDraftRecord
 from . import resend_client, sales_agent
@@ -15,18 +13,6 @@ router = APIRouter(prefix="/api", tags=["sales"])
 
 VALID_LEAD_STATUSES = {"new", "qualified", "dismissed"}
 VALID_DRAFT_STATUSES = {"pending_approval", "approved_sent", "send_failed"}
-
-
-class SalesLeadIngestion(BaseModel):
-    # No lead_type field on purpose -- this endpoint is for VoltarisOS's own inbound
-    # signup flow (demo requests, waitlist, trial starts) only. lead_type is always
-    # forced to "consumer_inbound" server-side; a caller cannot claim any other consent
-    # basis through this payload. B2B partner leads only ever come from the fixed,
-    # human-maintained VOLT_SALES_B2B_PROSPECTS list, never through this endpoint.
-    name: str = Field(min_length=1, max_length=160)
-    email: str = Field(min_length=3, max_length=255)
-    source: str | None = Field(default=None, max_length=120)
-    context: str | None = None
 
 
 def lead_dict(lead: SalesLeadRecord) -> dict:
@@ -63,24 +49,6 @@ def draft_dict(draft: SalesOutreachDraftRecord) -> dict:
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
         "approved_at": draft.approved_at.isoformat() if draft.approved_at else None,
     }
-
-
-@router.post("/sales-leads", dependencies=[Depends(require_scope("sales:write"))])
-def ingest_sales_lead(payload: SalesLeadIngestion, principal: Principal = Depends(authenticate)) -> dict:
-    with session_scope() as session:
-        lead = SalesLeadRecord(
-            lead_type="consumer_inbound",
-            status="new",
-            source=payload.source or "voltarisos_inbound",
-            name=payload.name,
-            email=payload.email.strip().lower(),
-            context=payload.context,
-            consent_basis="inbound_signup",
-        )
-        session.add(lead)
-        session.flush()
-        session.add(AuditRecord(type="sales_lead_ingested", reference_id=str(lead.id), detail=f"via {principal.name}"))
-        return lead_dict(lead)
 
 
 @router.get("/sales-leads")

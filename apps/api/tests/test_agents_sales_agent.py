@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.agents import sales_agent
+from app.agents import sales_agent, voltaris_client
 from app.db import session_scope
 from app.models import SalesLeadRecord, SalesOutreachDraftRecord
 
@@ -26,7 +26,7 @@ def _tool_response(tool_name, input_dict):
 
 
 def _seed_lead(**overrides) -> int:
-    defaults = dict(lead_type="consumer_inbound", status="new", name="Jan de Boer", email="jan@example.com", consent_basis="inbound_signup")
+    defaults = dict(lead_type="tenant_signup", status="new", name="Jan de Boer", email="jan@example.com", consent_basis="existing_customer_tenant")
     defaults.update(overrides)
     with session_scope() as session:
         lead = SalesLeadRecord(**defaults)
@@ -102,7 +102,7 @@ def test_sync_b2b_prospects_is_idempotent(monkeypatch):
 # --- _qualify_new_leads -------------------------------------------------------------------
 
 def test_qualify_new_leads_persists_fields_and_marks_qualified(monkeypatch):
-    lead_id = _seed_lead(email="qualify-test@example.com")
+    lead_id = _seed_lead(lead_type="b2b_partner", consent_basis="b2b_legitimate_interest", email="qualify-test@example.com")
     monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
         sales_agent.SUBMIT_QUALIFICATION_TOOL_NAME,
         {"fit_score": 0.8, "qualification_summary": "Dono de casa com solar, a considerar bateria.", "suggested_next_step": "Agendar demo."},
@@ -119,8 +119,8 @@ def test_qualify_new_leads_persists_fields_and_marks_qualified(monkeypatch):
 
 
 def test_qualify_new_leads_one_failure_does_not_abort_the_rest(monkeypatch):
-    good_id = _seed_lead(email="good-lead@example.com")
-    bad_id = _seed_lead(email="bad-lead@example.com")
+    good_id = _seed_lead(lead_type="b2b_partner", consent_basis="b2b_legitimate_interest", email="good-lead@example.com")
+    bad_id = _seed_lead(lead_type="b2b_partner", consent_basis="b2b_legitimate_interest", email="bad-lead@example.com")
     calls = []
 
     def fake_call_model(system, prompt, schema, name):
@@ -138,7 +138,7 @@ def test_qualify_new_leads_one_failure_does_not_abort_the_rest(monkeypatch):
 
 
 def test_qualify_new_leads_no_tool_use_leaves_lead_new(monkeypatch):
-    lead_id = _seed_lead(email="no-tool-use@example.com")
+    lead_id = _seed_lead(lead_type="b2b_partner", consent_basis="b2b_legitimate_interest", email="no-tool-use@example.com")
     monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: SimpleNamespace(
         content=[{"type": "text", "text": "uncertain"}], stop_reason="end_turn", input_tokens=10, output_tokens=5,
     ))
@@ -148,11 +148,26 @@ def test_qualify_new_leads_no_tool_use_leaves_lead_new(monkeypatch):
     assert _get_lead(lead_id).status == "new"
 
 
+def test_qualify_new_leads_never_touches_tenant_signup_leads(monkeypatch):
+    # Real tenants are already customers -- there is no ICP fit to score, so
+    # _qualify_new_leads must never even attempt to call the model for them.
+    tenant_id = _seed_lead(lead_type="tenant_signup", email="tenant-not-qualified@example.com")
+
+    def _forbidden(*a, **k):
+        raise AssertionError("must not call the model to 'qualify' a real tenant")
+
+    monkeypatch.setattr(sales_agent, "_call_model", _forbidden)
+
+    sales_agent._qualify_new_leads()
+
+    assert _get_lead(tenant_id).status == "new"
+
+
 # --- _generate_pending_outreach_drafts -----------------------------------------------------
 
 def test_generate_outreach_draft_only_for_qualified_b2b_without_existing_draft(monkeypatch):
     b2b_id = _seed_lead(lead_type="b2b_partner", status="qualified", email="b2b-draft-test@example.com", consent_basis="b2b_legitimate_interest", company="Zon BV")
-    consumer_id = _seed_lead(lead_type="consumer_inbound", status="qualified", email="consumer-no-draft@example.com")
+    tenant_id = _seed_lead(lead_type="tenant_signup", status="qualified", email="tenant-no-b2b-draft@example.com")
     monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
         sales_agent.SUBMIT_OUTREACH_TOOL_NAME,
         {"subject": "Parceria com o VoltarisOS", "body": "Corpo do email.\n\nSe preferires não receber mais contacto, basta responder a dizer que sim."},
@@ -164,7 +179,7 @@ def test_generate_outreach_draft_only_for_qualified_b2b_without_existing_draft(m
     assert len(b2b_drafts) == 1
     assert b2b_drafts[0].status == "pending_approval"
     assert "não receber mais contacto" in b2b_drafts[0].body
-    assert _drafts_for(consumer_id) == []
+    assert _drafts_for(tenant_id) == []
 
 
 def test_generate_outreach_draft_does_not_duplicate_existing_drafts(monkeypatch):
@@ -181,6 +196,111 @@ def test_generate_outreach_draft_does_not_duplicate_existing_drafts(monkeypatch)
     sales_agent._generate_pending_outreach_drafts()  # must not raise / must not call the model
 
     assert len(_drafts_for(b2b_id)) == 1
+
+
+# --- _sync_tenants_as_leads (real VoltarisOS tenants, not a fictional signup flow) --------
+
+def test_sync_tenants_creates_leads_from_real_tenant_data(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"data": {"tenants": [
+        {"id": "t1", "name": "Acme Energy BV", "plan": "pro", "email": "ops@acme-energy.example"},
+    ]}})
+
+    sales_agent._sync_tenants_as_leads()
+
+    with session_scope() as session:
+        lead = session.scalar(select(SalesLeadRecord).where(SalesLeadRecord.source == "voltaris_tenant:t1"))
+        assert lead is not None
+        assert lead.lead_type == "tenant_signup"
+        assert lead.status == "new"
+        assert lead.name == "Acme Energy BV"
+        assert lead.email == "ops@acme-energy.example"
+        assert "pro" in lead.context
+        assert lead.consent_basis == "existing_customer_tenant"
+
+
+def test_sync_tenants_is_idempotent(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"data": {"tenants": [
+        {"id": "t-idempotent", "name": "Repeat BV", "plan": "free"},
+    ]}})
+
+    sales_agent._sync_tenants_as_leads()
+    sales_agent._sync_tenants_as_leads()
+
+    with session_scope() as session:
+        rows = session.scalars(select(SalesLeadRecord).where(SalesLeadRecord.source == "voltaris_tenant:t-idempotent")).all()
+        assert len(rows) == 1
+
+
+def test_sync_tenants_handles_no_key_configured_without_inventing_a_tenant(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"error": "VOLTARIS_SERVICE_KEY not configured"})
+
+    sales_agent._sync_tenants_as_leads()  # must not raise, must not create anything
+
+    with session_scope() as session:
+        from app.models import AuditRecord
+        audit = session.scalar(select(AuditRecord).where(AuditRecord.type == "sales_tenant_sync_failed").order_by(AuditRecord.id.desc()))
+        assert audit is not None
+        assert "VOLTARIS_SERVICE_KEY" in audit.detail
+
+
+def test_sync_tenants_missing_email_stores_empty_string_not_none(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"data": {"tenants": [
+        {"id": "t-no-email", "name": "No Email BV", "plan": "free"},
+    ]}})
+
+    sales_agent._sync_tenants_as_leads()
+
+    with session_scope() as session:
+        lead = session.scalar(select(SalesLeadRecord).where(SalesLeadRecord.source == "voltaris_tenant:t-no-email"))
+        assert lead.email == ""
+
+
+# --- _generate_pending_tenant_welcome_drafts -----------------------------------------------
+
+def test_generate_tenant_welcome_draft_for_new_tenant_with_email(monkeypatch):
+    tenant_id = _seed_lead(lead_type="tenant_signup", status="new", email="welcome-test@example.com", consent_basis="existing_customer_tenant")
+    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+        sales_agent.SUBMIT_WELCOME_TOOL_NAME,
+        {"subject": "Bem-vindo ao VoltarisOS", "body": "Olá! A equipa está disponível para ajudar na configuração inicial."},
+    ))
+
+    sales_agent._generate_pending_tenant_welcome_drafts()
+
+    drafts = _drafts_for(tenant_id)
+    assert len(drafts) == 1
+    assert drafts[0].status == "pending_approval"
+    lead = _get_lead(tenant_id)
+    assert lead.status == "qualified"  # repurposed to mean "processed" for a tenant lead
+    assert lead.qualified_at is not None
+
+
+def test_generate_tenant_welcome_draft_skips_tenant_without_email(monkeypatch):
+    tenant_id = _seed_lead(lead_type="tenant_signup", status="new", email="", consent_basis="existing_customer_tenant")
+
+    def _forbidden(*a, **k):
+        raise AssertionError("must not draft a welcome email with no contact address")
+
+    monkeypatch.setattr(sales_agent, "_call_model", _forbidden)
+
+    sales_agent._generate_pending_tenant_welcome_drafts()
+
+    assert _drafts_for(tenant_id) == []
+    assert _get_lead(tenant_id).status == "new"  # stays visible as needing manual attention
+
+
+def test_generate_tenant_welcome_draft_does_not_duplicate(monkeypatch):
+    tenant_id = _seed_lead(lead_type="tenant_signup", status="new", email="no-dup-welcome@example.com", consent_basis="existing_customer_tenant")
+    with session_scope() as session:
+        session.add(SalesOutreachDraftRecord(lead_id=tenant_id, subject="Existing", body="Existing body", status="pending_approval"))
+
+    def _forbidden(*a, **k):
+        raise AssertionError("must not generate a second welcome draft for a tenant that already has one")
+
+    monkeypatch.setattr(sales_agent, "_call_model", _forbidden)
+
+    sales_agent._generate_pending_tenant_welcome_drafts()
+
+    assert len(_drafts_for(tenant_id)) == 1
 
 
 # --- run_sales_sweep orchestration ---------------------------------------------------------

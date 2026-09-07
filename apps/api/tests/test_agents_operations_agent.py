@@ -6,7 +6,7 @@ from app.models import DealRecord, OnboardingRecord, OnboardingStepRecord, Opera
 
 
 def _seed_lead(**overrides) -> int:
-    defaults = dict(lead_type="consumer_inbound", status="qualified", name="Anke Visser", email="ops-agent-test@example.com", consent_basis="inbound_signup")
+    defaults = dict(lead_type="tenant_signup", status="qualified", name="Anke Visser", email="ops-agent-test@example.com", consent_basis="existing_customer_tenant")
     defaults.update(overrides)
     with session_scope() as session:
         lead = SalesLeadRecord(**defaults)

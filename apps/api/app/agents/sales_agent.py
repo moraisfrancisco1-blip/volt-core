@@ -12,6 +12,7 @@ from sqlalchemy import select
 from .. import llm_client
 from ..db import session_scope
 from ..models import AuditRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import voltaris_client
 
 # Leads can't wait a week like the Market Intelligence digest -- default cadence is much
 # tighter (6h). max() floor keeps a misconfigured tiny value from turning this into an
@@ -20,14 +21,14 @@ SWEEP_INTERVAL_SECONDS = max(300, int(os.getenv("VOLT_SALES_INTERVAL_SECONDS", "
 MODEL = os.getenv("VOLT_SALES_MODEL") or llm_client.default_model()
 MAX_TOKENS = 1024
 
-CONSUMER_ICP_PROMPT = (
-    "Perfil de cliente ideal (consumidor): dono de casa individual na Holanda ou "
-    "restante UE que já tem painéis solares instalados, e está a considerar (ou já "
-    "perguntou sobre) uma bateria doméstica e/ou um carregador inteligente de EV. "
-    "Sinais positivos: menciona querer reduzir dependência da rede, poupar com "
-    "preços dinâmicos, ou já usa/considera um veículo elétrico. Este perfil serve "
-    "só para qualificar leads que já chegaram por iniciativa própria -- nunca para "
-    "os encontrar ou contactar primeiro."
+# A real backend audit of VoltarisOS (2026-09-07) confirmed it's a B2B fleet/VPP platform
+# with tenants via register/invite -- there is no consumer demo/waitlist flow. "Leads" of
+# type tenant_signup are real tenants pulled from /api/admin/tenants: already converted,
+# needing welcome/follow-up, not a prospect to score against a consumer ICP.
+_TENANT_CONTEXT_PROMPT = (
+    "Nota: este 'lead' é na verdade um tenant real que já se registou e converteu na "
+    "plataforma VoltarisOS -- não é um prospect a qualificar, já é cliente. O objetivo "
+    "aqui é acompanhamento e boas-vindas, não avaliação de fit."
 )
 B2B_ICP_PROMPT = (
     "Perfil de parceiro ideal (B2B): instaladora de painéis solares ou consultora "
@@ -69,6 +70,20 @@ SUBMIT_OUTREACH_TOOL_SCHEMA: dict[str, Any] = {
     },
 }
 
+SUBMIT_WELCOME_TOOL_NAME = "submit_tenant_welcome_draft"
+SUBMIT_WELCOME_TOOL_SCHEMA: dict[str, Any] = {
+    "name": SUBMIT_WELCOME_TOOL_NAME,
+    "description": "Submete um rascunho de email de boas-vindas/acompanhamento para um tenant real já registado. Chama isto exatamente uma vez.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "subject": {"type": "string", "description": "Assunto do email, curto e direto."},
+            "body": {"type": "string", "description": "Corpo do email em português, caloroso e profissional."},
+        },
+        "required": ["subject", "body"],
+    },
+}
+
 SUBMIT_CALL_PREP_TOOL_NAME = "submit_call_prep"
 SUBMIT_CALL_PREP_TOOL_SCHEMA: dict[str, Any] = {
     "name": SUBMIT_CALL_PREP_TOOL_NAME,
@@ -104,6 +119,17 @@ _OUTREACH_SYSTEM_PROMPT = (
     "contacto futuro (ex. 'Se preferires não receber mais contacto, basta "
     "responder a dizer que sim.'). Este rascunho nunca é enviado por ti -- fica "
     "sempre pendente de aprovação humana antes de qualquer envio real."
+)
+
+_WELCOME_SYSTEM_PROMPT = (
+    "És o Agente de Sales do VOLT CORE, dedicado ao VoltarisOS. Prepara um rascunho "
+    "de email de boas-vindas/acompanhamento para um tenant que já se registou na "
+    "plataforma real do VoltarisOS -- já é cliente, não um prospect a convencer. "
+    "Tom caloroso e profissional; confirma que a equipa está disponível para ajudar "
+    "na configuração inicial. Nunca inventes funcionalidades, prazos, ou condições "
+    "que não estejam confirmadas no contexto fornecido. Este rascunho nunca é "
+    "enviado por ti -- fica sempre pendente de aprovação humana antes de qualquer "
+    "envio real."
 )
 
 
@@ -168,9 +194,111 @@ def _sync_b2b_prospects() -> None:
             existing_emails.add(email)
 
 
+def _sync_tenants_as_leads() -> None:
+    # Real tenants from VoltarisOS's own /api/admin/tenants -- the actual equivalent of
+    # "someone who already converted", confirmed by a direct backend audit. There is no
+    # consumer demo/waitlist signup in the real product, so this fully replaces the old
+    # fictional "consumer_inbound" ingestion path.
+    result = voltaris_client.get_tenants()
+    if "error" in result:
+        with session_scope() as session:
+            session.add(AuditRecord(type="sales_tenant_sync_failed", detail=result["error"][:500]))
+        return
+
+    raw = result.get("data")
+    if isinstance(raw, list):
+        tenants = raw
+    elif isinstance(raw, dict):
+        tenants = raw.get("tenants")
+    else:
+        tenants = None
+    if not isinstance(tenants, list):
+        with session_scope() as session:
+            session.add(AuditRecord(type="sales_tenant_sync_failed", detail="unexpected /api/admin/tenants response shape"))
+        return
+
+    with session_scope() as session:
+        existing_sources = {
+            row for row in session.scalars(select(SalesLeadRecord.source).where(SalesLeadRecord.lead_type == "tenant_signup")).all()
+        }
+        for tenant in tenants:
+            if not isinstance(tenant, dict):
+                continue
+            tenant_id = str(tenant.get("id") or tenant.get("tenant_id") or "").strip()
+            if not tenant_id:
+                continue
+            source_key = f"voltaris_tenant:{tenant_id}"
+            if source_key in existing_sources:
+                continue
+            name = str(tenant.get("name") or tenant.get("company_name") or f"Tenant {tenant_id}")
+            plan = str(tenant.get("plan") or tenant.get("plan_name") or "desconhecido")
+            email = tenant.get("email") or tenant.get("owner_email") or tenant.get("contact_email") or ""
+            session.add(SalesLeadRecord(
+                lead_type="tenant_signup",
+                status="new",
+                source=source_key,
+                name=name,
+                email=str(email).strip().lower(),
+                company=name,
+                context=f"Tenant real da VoltarisOS (id: {tenant_id}). Plano: {plan}.",
+                consent_basis="existing_customer_tenant",
+            ))
+            existing_sources.add(source_key)
+
+
+def _generate_pending_tenant_welcome_drafts() -> None:
+    with session_scope() as session:
+        drafted_lead_ids = {row for row in session.scalars(select(SalesOutreachDraftRecord.lead_id)).all()}
+        candidate_ids = session.scalars(
+            select(SalesLeadRecord.id).where(SalesLeadRecord.lead_type == "tenant_signup", SalesLeadRecord.status == "new")
+        ).all()
+        pending_ids = [lead_id for lead_id in candidate_ids if lead_id not in drafted_lead_ids]
+
+    for lead_id in pending_ids:
+        try:
+            with session_scope() as session:
+                lead = session.get(SalesLeadRecord, lead_id)
+                if lead is None or lead.status != "new":
+                    continue
+                if not lead.email:
+                    # No contact email in the real tenant record -- nothing to draft a
+                    # message to. Left in "new" so it stays visible as needing manual
+                    # attention instead of silently disappearing.
+                    session.add(AuditRecord(type="sales_tenant_welcome_skipped", reference_id=str(lead_id), detail="no contact email available"))
+                    continue
+                prompt = (
+                    f"{_TENANT_CONTEXT_PROMPT}\n\n"
+                    f"Tenant:\nNome: {lead.name}\nEmail: {lead.email}\n"
+                    f"Contexto: {lead.context or '(sem contexto adicional)'}"
+                )
+                response = _call_model(_WELCOME_SYSTEM_PROMPT, prompt, SUBMIT_WELCOME_TOOL_SCHEMA, SUBMIT_WELCOME_TOOL_NAME)
+                submitted = _extract_tool_input(response, SUBMIT_WELCOME_TOOL_NAME)
+                if submitted is None:
+                    session.add(AuditRecord(type="sales_tenant_welcome_failed", reference_id=str(lead_id), detail=f"model stopped ({response.stop_reason}) without submitting"))
+                    continue
+                session.add(SalesOutreachDraftRecord(
+                    lead_id=lead_id,
+                    subject=str(submitted.get("subject") or ""),
+                    body=str(submitted.get("body") or ""),
+                    status="pending_approval",
+                    model=MODEL,
+                ))
+                # "qualified" is repurposed here to mean "processed" for a tenant lead --
+                # there is no fit to score, it's already a customer.
+                lead.status = "qualified"
+                lead.qualified_at = datetime.now(timezone.utc)
+                session.add(AuditRecord(type="sales_tenant_welcome_created", reference_id=str(lead_id), detail="status=pending_approval"))
+        except Exception as exc:
+            # One tenant's failure must never abort the rest.
+            with session_scope() as session:
+                session.add(AuditRecord(type="sales_tenant_welcome_failed", reference_id=str(lead_id), detail=str(exc)[:500]))
+
+
 def _qualify_new_leads() -> None:
     with session_scope() as session:
-        new_lead_ids = session.scalars(select(SalesLeadRecord.id).where(SalesLeadRecord.status == "new")).all()
+        new_lead_ids = session.scalars(
+            select(SalesLeadRecord.id).where(SalesLeadRecord.status == "new", SalesLeadRecord.lead_type == "b2b_partner")
+        ).all()
 
     for lead_id in new_lead_ids:
         try:
@@ -178,9 +306,8 @@ def _qualify_new_leads() -> None:
                 lead = session.get(SalesLeadRecord, lead_id)
                 if lead is None or lead.status != "new":
                     continue
-                icp = CONSUMER_ICP_PROMPT if lead.lead_type == "consumer_inbound" else B2B_ICP_PROMPT
                 prompt = (
-                    f"Perfil de cliente ideal:\n{icp}\n\n"
+                    f"Perfil de cliente ideal:\n{B2B_ICP_PROMPT}\n\n"
                     f"Lead a qualificar:\nNome: {lead.name}\nEmail: {lead.email}\n"
                     f"Empresa: {lead.company or 'N/A'}\nOrigem: {lead.source or 'desconhecida'}\n"
                     f"Contexto: {lead.context or '(sem contexto adicional)'}"
@@ -243,8 +370,10 @@ def _generate_pending_outreach_drafts() -> None:
 
 def run_sales_sweep() -> None:
     try:
+        _sync_tenants_as_leads()
         _sync_b2b_prospects()
         _qualify_new_leads()
+        _generate_pending_tenant_welcome_drafts()
         _generate_pending_outreach_drafts()
     except Exception as exc:
         with session_scope() as session:
@@ -257,10 +386,10 @@ def run_call_prep(lead_id: int) -> None:
             lead = session.get(SalesLeadRecord, lead_id)
             if lead is None:
                 return
-            icp = CONSUMER_ICP_PROMPT if lead.lead_type == "consumer_inbound" else B2B_ICP_PROMPT
+            icp = B2B_ICP_PROMPT if lead.lead_type == "b2b_partner" else _TENANT_CONTEXT_PROMPT
             prompt = (
-                f"Perfil de cliente ideal:\n{icp}\n\n"
-                f"Lead: {lead.name} <{lead.email}> ({lead.company or 'consumidor'})\n"
+                f"Perfil/contexto:\n{icp}\n\n"
+                f"Lead: {lead.name} <{lead.email}> ({lead.company or 'tenant'})\n"
                 f"Qualificação já feita: {lead.qualification_summary or '(ainda não qualificado)'}\n"
                 f"Próximo passo sugerido: {lead.suggested_next_step or '(nenhum)'}\n\n"
                 "Foi marcada uma chamada/demo com este lead. Prepara um resumo curto de "

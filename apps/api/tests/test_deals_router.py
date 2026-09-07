@@ -3,11 +3,21 @@ from fastapi.testclient import TestClient
 from app.agents import deals_agent, resend_client
 from app.db import session_scope
 from app.main import app
-from app.models import DealProposalRecord, DealRecord, SalesLeadRecord
+from app.models import DealExpansionSignalRecord, DealProposalRecord, DealRecord, SalesLeadRecord
+
+
+def _seed_expansion_signal(**overrides) -> int:
+    defaults = dict(tenant_id="router-tenant-1", tenant_name="Router Tenant BV", current_plan="starter", note="Tenant real, plano atual: starter.", status="flagged")
+    defaults.update(overrides)
+    with session_scope() as session:
+        signal = DealExpansionSignalRecord(**defaults)
+        session.add(signal)
+        session.flush()
+        return signal.id
 
 
 def _seed_lead(**overrides) -> int:
-    defaults = dict(lead_type="consumer_inbound", status="qualified", name="Jan de Boer", email="router-deal-test@example.com", consent_basis="inbound_signup")
+    defaults = dict(lead_type="tenant_signup", status="qualified", name="Jan de Boer", email="router-deal-test@example.com", consent_basis="existing_customer_tenant")
     defaults.update(overrides)
     with session_scope() as session:
         lead = SalesLeadRecord(**defaults)
@@ -242,3 +252,68 @@ def test_list_proposals_rejects_invalid_status():
     with TestClient(app) as client:
         response = client.get("/api/deal-proposals?status=not-a-real-status")
         assert response.status_code == 422
+
+
+# --- deal expansion signals ------------------------------------------------------------------
+
+def test_list_and_get_expansion_signal():
+    signal_id = _seed_expansion_signal(tenant_id="router-tenant-list")
+    with TestClient(app) as client:
+        list_response = client.get("/api/deal-expansion-signals")
+        assert list_response.status_code == 200
+        assert any(item["id"] == signal_id for item in list_response.json())
+
+        get_response = client.get(f"/api/deal-expansion-signals/{signal_id}")
+        assert get_response.status_code == 200
+        assert get_response.json()["tenant_id"] == "router-tenant-list"
+
+
+def test_get_expansion_signal_missing_returns_404():
+    with TestClient(app) as client:
+        response = client.get("/api/deal-expansion-signals/999999")
+        assert response.status_code == 404
+
+
+def test_list_expansion_signals_filters_by_status():
+    flagged_id = _seed_expansion_signal(tenant_id="router-tenant-flagged", status="flagged")
+    reviewed_id = _seed_expansion_signal(tenant_id="router-tenant-reviewed", status="reviewed")
+
+    with TestClient(app) as client:
+        response = client.get("/api/deal-expansion-signals?status=flagged")
+        ids = {item["id"] for item in response.json()}
+        assert flagged_id in ids
+        assert reviewed_id not in ids
+
+
+def test_list_expansion_signals_rejects_invalid_status():
+    with TestClient(app) as client:
+        response = client.get("/api/deal-expansion-signals?status=not-a-real-status")
+        assert response.status_code == 422
+
+
+def test_mark_expansion_signal_reviewed_is_pure_bookkeeping():
+    signal_id = _seed_expansion_signal(tenant_id="router-tenant-review-me")
+    with TestClient(app) as client:
+        response = client.post(f"/api/deal-expansion-signals/{signal_id}/mark-reviewed")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "reviewed"
+        assert payload["reviewed_at"] is not None
+        # Nothing about the plan/price/tenant identity changes -- only the status.
+        assert payload["current_plan"] == "starter"
+
+
+def test_mark_expansion_signal_reviewed_is_idempotent():
+    signal_id = _seed_expansion_signal(tenant_id="router-tenant-double-review")
+    with TestClient(app) as client:
+        first = client.post(f"/api/deal-expansion-signals/{signal_id}/mark-reviewed")
+        second = client.post(f"/api/deal-expansion-signals/{signal_id}/mark-reviewed")
+        # SQLite (used in tests) doesn't round-trip tzinfo the way Postgres (production)
+        # does, so compare only the naive timestamp portion, not the raw string.
+        assert first.json()["reviewed_at"][:19] == second.json()["reviewed_at"][:19]
+
+
+def test_mark_expansion_signal_reviewed_missing_returns_404():
+    with TestClient(app) as client:
+        response = client.post("/api/deal-expansion-signals/999999/mark-reviewed")
+        assert response.status_code == 404

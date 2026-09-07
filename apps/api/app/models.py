@@ -162,6 +162,7 @@ class MarketIntelligenceReportRecord(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     telegram_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    platform_status_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -169,7 +170,7 @@ class MarketIntelligenceReportRecord(Base):
 class SalesLeadRecord(Base):
     __tablename__ = "sales_leads"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    lead_type: Mapped[str] = mapped_column(String(32), index=True)  # "consumer_inbound" | "b2b_partner"
+    lead_type: Mapped[str] = mapped_column(String(32), index=True)  # "tenant_signup" | "b2b_partner"
     status: Mapped[str] = mapped_column(String(32), default="new", index=True)  # "new" | "qualified" | "dismissed"
     source: Mapped[str | None] = mapped_column(String(120), nullable=True)
     name: Mapped[str] = mapped_column(String(160))
@@ -223,6 +224,18 @@ class DealProposalRecord(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DealExpansionSignalRecord(Base):
+    __tablename__ = "deal_expansion_signals"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(120), index=True, unique=True)
+    tenant_name: Mapped[str] = mapped_column(String(255))
+    current_plan: Mapped[str] = mapped_column(String(120))
+    note: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="flagged", index=True)  # "flagged" | "reviewed"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MarketingContentRecord(Base):

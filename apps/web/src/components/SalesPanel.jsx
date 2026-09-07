@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const LEAD_TYPE_LABEL = { consumer_inbound: 'CONSUMIDOR', b2b_partner: 'PARCEIRO B2B' };
+const LEAD_TYPE_LABEL = { tenant_signup: 'TENANT REAL', b2b_partner: 'PARCEIRO B2B' };
 
 function DraftRow({ draft, apiBase, onUpdated }) {
   const [state, setState] = useState('idle'); // idle | sending | done | error
@@ -78,7 +78,7 @@ function SalesPanel({ leads, drafts, apiBase, onDraftUpdated, onSelectLead }) {
         </div>
         <div style={{ flex: 1 }}>
           <div className="mono panel-title" style={{ marginBottom: 8 }}>
-            OUTREACH B2B {pendingDrafts.length > 0 ? `(${pendingDrafts.length} pendente${pendingDrafts.length > 1 ? 's' : ''})` : ''}
+            RASCUNHOS PENDENTES (boas-vindas a tenants + outreach B2B) {pendingDrafts.length > 0 ? `(${pendingDrafts.length})` : ''}
           </div>
           {recentDrafts.length === 0
             ? <div className="empty-state">Sem rascunhos de outreach ainda.</div>
