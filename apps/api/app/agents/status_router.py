@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AgentInvestigationRecord, AuditRecord, BackOfficeReportRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, OnboardingRecord, OperationsActivationRequestRecord, SalesLeadRecord, SalesOutreachDraftRecord
-from . import agent_inbox, backoffice_agent, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
+from ..models import AgentInvestigationRecord, AuditRecord, BackOfficeReportRecord, CustomerQueryRecord, CustomerResponseDraftRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, OnboardingRecord, OperationsActivationRequestRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import agent_inbox, backoffice_agent, customer_agent, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -182,6 +182,29 @@ def agents_status() -> list[dict]:
             "state": backoffice_state,
             "last_activity_at": _iso(backoffice_activity),
             "last_status": "failed" if backoffice_state == "error" else ("completed" if backoffice_activity else None),
+        })
+
+        # Customer mirrors Sales' audit-based status (many queries/drafts touched per
+        # sweep, no single "last sweep" record).
+        customer_audit_latest = session.scalar(
+            select(AuditRecord).where(AuditRecord.type.like("customer_%")).order_by(AuditRecord.id.desc())
+        )
+        query_latest = session.scalar(select(CustomerQueryRecord).order_by(CustomerQueryRecord.id.desc()))
+        draft_latest = session.scalar(select(CustomerResponseDraftRecord).order_by(CustomerResponseDraftRecord.id.desc()))
+        query_activity = (query_latest.triaged_at or query_latest.created_at) if query_latest else None
+        draft_activity = draft_latest.created_at if draft_latest else None
+        customer_activity = max((t for t in (query_activity, draft_activity) if t is not None), default=None)
+        if customer_agent.is_sweep_in_progress():
+            customer_state = "working"
+        elif customer_audit_latest is not None and customer_audit_latest.type.endswith("_failed"):
+            customer_state = "error"
+        else:
+            customer_state = "idle"
+        results.append({
+            "agent": "customer",
+            "state": customer_state,
+            "last_activity_at": _iso(customer_activity),
+            "last_status": "failed" if customer_state == "error" else ("completed" if customer_activity else None),
         })
 
         return results

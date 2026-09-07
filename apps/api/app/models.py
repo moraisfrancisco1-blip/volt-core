@@ -301,6 +301,43 @@ class BackOfficeReportRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CustomerQueryRecord(Base):
+    __tablename__ = "customer_queries"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(64))  # e.g. "manual_test" -- no real support channel connected yet
+    customer_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    customer_email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    question: Mapped[str] = mapped_column(Text)
+    classification: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)  # "simple" | "sensitive"
+    sensitive_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="new", index=True)  # "new" | "simple" | "sensitive_escalated"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CustomerResponseDraftRecord(Base):
+    __tablename__ = "customer_response_drafts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    query_id: Mapped[int] = mapped_column(Integer, index=True)
+    subject: Mapped[str] = mapped_column(String(255))
+    body: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending_approval", index=True)  # "pending_approval" | "approved_sent" | "send_failed"
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CustomerQueryPatternRecord(Base):
+    __tablename__ = "customer_query_patterns"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    normalized_question: Mapped[str] = mapped_column(String(500), unique=True, index=True)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+    example_question: Mapped[str] = mapped_column(Text)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class TelegramScheduleRecord(Base):
     __tablename__ = "telegram_schedules"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

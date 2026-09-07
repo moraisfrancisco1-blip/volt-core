@@ -18,6 +18,7 @@ import DealsPanel from './components/DealsPanel.jsx';
 import MarketingPanel from './components/MarketingPanel.jsx';
 import OperationsPanel from './components/OperationsPanel.jsx';
 import BackOfficePanel from './components/BackOfficePanel.jsx';
+import CustomerPanel from './components/CustomerPanel.jsx';
 import DetailModal from './components/DetailModal.jsx';
 import VoltCoreView from './components/views/VoltCoreView.jsx';
 import AgentsView from './components/views/AgentsView.jsx';
@@ -32,7 +33,7 @@ const INVESTIGATIONS_FETCH_LIMIT = 100;
 
 // Mirrors each reactive agent's investigation_type -- kept in sync manually with the
 // backend (apps/api/app/agents/*_runner.py and agents/status_router.py).
-const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations', 'backoffice'];
+const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations', 'backoffice', 'customer'];
 const AGENT_LABELS = {
   volt: ['VOLT', 'voice_call_failure'],
   dev_debug: ['DEV/DEBUG', 'code_diagnosis'],
@@ -45,6 +46,7 @@ const AGENT_LABELS = {
   marketing: ['MARKETING', null],
   operations: ['OPERATIONS', null],
   backoffice: ['BACK OFFICE', null],
+  customer: ['CUSTOMER', null],
 };
 
 function truncate(text, max = 60) {
@@ -81,6 +83,9 @@ function App() {
   const [recurringTasks, setRecurringTasks] = useState([]);
   const [backofficeReports, setBackofficeReports] = useState([]);
   const [backofficeReconciliations, setBackofficeReconciliations] = useState([]);
+  const [customerQueries, setCustomerQueries] = useState([]);
+  const [customerDrafts, setCustomerDrafts] = useState([]);
+  const [customerPatterns, setCustomerPatterns] = useState([]);
   const [agentsStatus, setAgentsStatus] = useState([]);
   const [integrationsStatus, setIntegrationsStatus] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -90,7 +95,7 @@ function App() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
@@ -108,6 +113,9 @@ function App() {
         fetch(`${API}/api/operations/recurring-tasks`, { cache: 'no-store' }),
         fetch(`${API}/api/backoffice/reports?limit=5`, { cache: 'no-store' }),
         fetch(`${API}/api/backoffice/reconciliations?limit=50`, { cache: 'no-store' }),
+        fetch(`${API}/api/customer-queries?limit=50`, { cache: 'no-store' }),
+        fetch(`${API}/api/customer-response-drafts?limit=20`, { cache: 'no-store' }),
+        fetch(`${API}/api/customer-query-patterns?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/agents/status`, { cache: 'no-store' }),
         fetch(`${API}/api/integrations/status`, { cache: 'no-store' }),
       ]);
@@ -128,6 +136,9 @@ function App() {
       if (!recurringTasksResponse.ok) throw new Error(`operations recurring tasks unavailable (${recurringTasksResponse.status})`);
       if (!backofficeReportsResponse.ok) throw new Error(`backoffice reports unavailable (${backofficeReportsResponse.status})`);
       if (!backofficeReconciliationsResponse.ok) throw new Error(`backoffice reconciliations unavailable (${backofficeReconciliationsResponse.status})`);
+      if (!customerQueriesResponse.ok) throw new Error(`customer queries unavailable (${customerQueriesResponse.status})`);
+      if (!customerDraftsResponse.ok) throw new Error(`customer response drafts unavailable (${customerDraftsResponse.status})`);
+      if (!customerPatternsResponse.ok) throw new Error(`customer query patterns unavailable (${customerPatternsResponse.status})`);
       if (!agentsStatusResponse.ok) throw new Error(`agent status unavailable (${agentsStatusResponse.status})`);
       if (!integrationsStatusResponse.ok) throw new Error(`integrations status unavailable (${integrationsStatusResponse.status})`);
       setDashboard(await dashboardResponse.json());
@@ -147,6 +158,9 @@ function App() {
       setRecurringTasks(await recurringTasksResponse.json());
       setBackofficeReports(await backofficeReportsResponse.json());
       setBackofficeReconciliations(await backofficeReconciliationsResponse.json());
+      setCustomerQueries(await customerQueriesResponse.json());
+      setCustomerDrafts(await customerDraftsResponse.json());
+      setCustomerPatterns(await customerPatternsResponse.json());
       setAgentsStatus(await agentsStatusResponse.json());
       setIntegrationsStatus(await integrationsStatusResponse.json());
     } catch (err) {
@@ -194,6 +208,9 @@ function App() {
     } else if (agentId === 'backoffice') {
       const latestReport = backofficeReports[0];
       lastActivityText = latestReport ? truncate(latestReport.summary) : '';
+    } else if (agentId === 'customer') {
+      const latestQuery = customerQueries[0];
+      lastActivityText = latestQuery ? truncate(`${latestQuery.status === 'sensitive_escalated' ? 'Sinalizado' : 'Triagem'} — ${latestQuery.question}`) : '';
     } else {
       const latest = (investigationsByType[investigationType] || [])[0];
       lastActivityText = latest ? truncate((latest.status === 'failed' ? latest.error : latest.hypothesis) || 'sem resumo') : '';
@@ -273,6 +290,15 @@ function App() {
       { label: 'Fonte de dados', value: item.data_source }, { label: 'Correspondência encontrada', value: item.match_found ? 'sim' : 'não' },
       { label: 'Fatura Stripe', value: item.stripe_invoice_id || '—' }, { label: 'Nota', value: item.note },
       { label: 'Atualizado em', value: item.updated_at },
+    ],
+  });
+  const openCustomerQueryDetail = item => setSelectedDetail({
+    title: item.customer_name || item.customer_email || `Pedido #${item.id}`,
+    fields: [
+      { label: 'Estado', value: item.status }, { label: 'Classificação', value: item.classification || '—' },
+      { label: 'Motivo de sinalização', value: item.sensitive_reason || '—' }, { label: 'Email', value: item.customer_email || '—' },
+      { label: 'Origem', value: item.source }, { label: 'Pedido', value: item.question },
+      { label: 'Triado em', value: item.triaged_at || '—' },
     ],
   });
 
@@ -392,6 +418,17 @@ function App() {
             report={backofficeReports[0] || null}
             reconciliations={backofficeReconciliations}
             onSelectReconciliation={openReconciliationDetail}
+          />
+        </div>
+
+        <div className="row-4">
+          <CustomerPanel
+            queries={customerQueries}
+            drafts={customerDrafts}
+            patterns={customerPatterns}
+            apiBase={API}
+            onDraftUpdated={updated => setCustomerDrafts(prev => prev.map(d => (d.id === updated.id ? updated : d)))}
+            onSelectQuery={openCustomerQueryDetail}
           />
         </div>
       </>
