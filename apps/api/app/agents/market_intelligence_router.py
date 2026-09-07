@@ -21,6 +21,7 @@ def report_dict(record: MarketIntelligenceReportRecord) -> dict:
         "regulation_summary": record.regulation_summary,
         "price_signals_summary": record.price_signals_summary,
         "industry_news_summary": record.industry_news_summary,
+        "platform_status_summary": record.platform_status_summary,
         "model": record.model,
         "turns_used": record.turns_used,
         "input_tokens": record.input_tokens,

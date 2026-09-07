@@ -68,6 +68,17 @@ def test_list_and_get_report_via_api():
         assert get_response.json()["id"] == report_id
 
 
+def test_report_exposes_platform_status_summary():
+    # Regression: this field was added to the model and the agent's own persist logic,
+    # but the router's serializer was never updated to expose it -- the dashboard showed
+    # nothing even though the real platform status was correctly stored in the DB.
+    report_id = _seed_report(platform_status_summary="Estado real da plataforma VoltarisOS.")
+
+    with TestClient(app) as client:
+        get_response = client.get(f"/api/market-intelligence-reports/{report_id}")
+        assert get_response.json()["platform_status_summary"] == "Estado real da plataforma VoltarisOS."
+
+
 def test_get_report_missing_returns_404():
     with TestClient(app) as client:
         response = client.get("/api/market-intelligence-reports/999999")
