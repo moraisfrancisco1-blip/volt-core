@@ -37,6 +37,7 @@ from .bootstrap import bootstrap_admin
 from .event_history import router as event_history_router, EventIngestion, create_event, event_dict as detailed_event_dict
 from .monitoring import start_monitoring, monitoring_status, run_controlled_self_test
 from .telegram import router as telegram_router
+from .agents.railway_tools import _railway_request
 
 app = FastAPI(title="VOLT CORE", version="1.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=VOLT_CORS_ORIGINS, allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "OPTIONS"], allow_headers=["*"])
@@ -197,3 +198,20 @@ def dispatch_test_call() -> dict:
         session.add(call); session.flush()
         session.add(AuditRecord(type="test_call_dispatched", reference_id=str(call.id), detail=result.get("sid", "")))
         return call_dict(call)
+
+
+# --- TEMPORARY diagnostic endpoint -- to be removed in the very next commit -----------------
+# Proxies a raw GraphQL query to Railway's real API using the server's own RAILWAY_TOKEN, so
+# the actual metrics query shape (never confirmed -- see railway_tools.py's own note) can be
+# verified against production instead of guessed at again. Read-only (any query can be sent,
+# but nothing in this codebase issues a mutation through it), gated behind a valid VOLT API
+# key so it isn't a public passthrough while it exists.
+class RailwayDebugQuery(BaseModel):
+    query: str
+    variables: dict = {}
+
+
+@app.post("/api/debug/railway-graphql")
+def debug_railway_graphql(payload: RailwayDebugQuery, principal: Principal = Depends(authenticate)) -> dict:
+    result = _railway_request(payload.query, payload.variables)
+    return {"result": result}
