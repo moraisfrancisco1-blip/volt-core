@@ -298,7 +298,7 @@ function App() {
             systemOk={systemOk}
             iconColor="#f0b429"
           />
-          <CoreHero />
+          <CoreHero agents={agentsForGrid} />
           <EventFeed events={events} onSelect={openEventDetail} />
         </div>
 
