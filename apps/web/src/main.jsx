@@ -84,6 +84,8 @@ function App() {
   const [recurringTasks, setRecurringTasks] = useState([]);
   const [backofficeReports, setBackofficeReports] = useState([]);
   const [backofficeReconciliations, setBackofficeReconciliations] = useState([]);
+  const [paymentControlSummary, setPaymentControlSummary] = useState(null);
+  const [paymentControlPayments, setPaymentControlPayments] = useState([]);
   const [customerQueries, setCustomerQueries] = useState([]);
   const [customerDrafts, setCustomerDrafts] = useState([]);
   const [customerPatterns, setCustomerPatterns] = useState([]);
@@ -96,7 +98,7 @@ function App() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, expansionSignalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, expansionSignalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, paymentControlSummaryResponse, paymentControlPaymentsResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
@@ -115,6 +117,8 @@ function App() {
         fetch(`${API}/api/operations/recurring-tasks`, { cache: 'no-store' }),
         fetch(`${API}/api/backoffice/reports?limit=5`, { cache: 'no-store' }),
         fetch(`${API}/api/backoffice/reconciliations?limit=50`, { cache: 'no-store' }),
+        fetch(`${API}/api/backoffice/payment-control-summary`, { cache: 'no-store' }),
+        fetch(`${API}/api/backoffice/dai-oakes-payments?limit=10`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-queries?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-response-drafts?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-query-patterns?limit=20`, { cache: 'no-store' }),
@@ -139,6 +143,8 @@ function App() {
       if (!recurringTasksResponse.ok) throw new Error(`operations recurring tasks unavailable (${recurringTasksResponse.status})`);
       if (!backofficeReportsResponse.ok) throw new Error(`backoffice reports unavailable (${backofficeReportsResponse.status})`);
       if (!backofficeReconciliationsResponse.ok) throw new Error(`backoffice reconciliations unavailable (${backofficeReconciliationsResponse.status})`);
+      if (!paymentControlSummaryResponse.ok) throw new Error(`payment control summary unavailable (${paymentControlSummaryResponse.status})`);
+      if (!paymentControlPaymentsResponse.ok) throw new Error(`payment control payments unavailable (${paymentControlPaymentsResponse.status})`);
       if (!customerQueriesResponse.ok) throw new Error(`customer queries unavailable (${customerQueriesResponse.status})`);
       if (!customerDraftsResponse.ok) throw new Error(`customer response drafts unavailable (${customerDraftsResponse.status})`);
       if (!customerPatternsResponse.ok) throw new Error(`customer query patterns unavailable (${customerPatternsResponse.status})`);
@@ -162,6 +168,8 @@ function App() {
       setRecurringTasks(await recurringTasksResponse.json());
       setBackofficeReports(await backofficeReportsResponse.json());
       setBackofficeReconciliations(await backofficeReconciliationsResponse.json());
+      setPaymentControlSummary(await paymentControlSummaryResponse.json());
+      setPaymentControlPayments(await paymentControlPaymentsResponse.json());
       setCustomerQueries(await customerQueriesResponse.json());
       setCustomerDrafts(await customerDraftsResponse.json());
       setCustomerPatterns(await customerPatternsResponse.json());
@@ -423,6 +431,8 @@ function App() {
           <BackOfficePanel
             report={backofficeReports[0] || null}
             reconciliations={backofficeReconciliations}
+            paymentControlSummary={paymentControlSummary}
+            paymentControlPayments={paymentControlPayments}
             onSelectReconciliation={openReconciliationDetail}
           />
         </div>

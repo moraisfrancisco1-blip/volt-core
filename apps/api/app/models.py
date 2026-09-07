@@ -314,6 +314,24 @@ class BackOfficeReportRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class DaiOakesPaymentRecord(Base):
+    # Real payment-control records from the Dai Oakes admin panel (a completely separate
+    # business from VoltarisOS) -- never cross-referenced with VoltarisOS's deals/leads,
+    # and only ever populated from a strict, allowlisted field set (see backoffice_agent.py).
+    # No clinical or patient-identifying field is ever stored here, by construction.
+    __tablename__ = "dai_oakes_payments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    external_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    amount_paid: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    due_date: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    paid_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stripe_invoice_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class CustomerQueryRecord(Base):
     __tablename__ = "customer_queries"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -33,6 +33,8 @@ def get(config: ExternalConnectorConfig, path: str, *, params: dict | None = Non
     api_key = os.getenv(config.api_key_env_var)
     if not api_key:
         return {"error": f"{config.api_key_env_var} not configured"}
+    if not config.base_url:
+        return {"error": f"{config.name} base URL not configured"}
     header_value = f"{config.api_key_scheme} {api_key}" if config.api_key_scheme else api_key
     headers = {config.api_key_header: header_value}
     try:
