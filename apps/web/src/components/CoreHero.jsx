@@ -21,6 +21,26 @@ function ellipsePath(rx, ry) {
 const RING_PATH = ellipsePath(RX, RY);
 const RING2_PATH = ellipsePath(RX2, RY2);
 
+// A gently tapered sine-wave path from the core out to a node -- two of these, mirrored
+// in phase, is what makes the connection read as an orbiting electron pair rather than a
+// dot sliding down a wire. Coordinates are relative to the core (animateMotion moves an
+// element by these offsets from its own start position), amplitude tapers to 0 at both
+// ends so the wave doesn't overshoot the node or wobble at the core.
+function electronPath(dx, dy, amplitude, phase) {
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const px = -uy, py = ux; // perpendicular unit vector
+  const segments = 14;
+  const points = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const envelope = Math.sin(t * Math.PI); // 0 at both ends, peak at the middle
+    const offset = amplitude * envelope * Math.sin(t * Math.PI * 3 + phase);
+    points.push([dx * t + px * offset, dy * t + py * offset]);
+  }
+  return `M${points.map(p => p.join(',')).join(' L')}`;
+}
+
 function labelAnchor(slot) {
   const dx = slot.x - CX, dy = slot.y - CY;
   if (Math.abs(dy) > RY * 0.85) return { anchor: 'middle', dx: 0, dy: dy < 0 ? -14 : 20 };
@@ -82,34 +102,49 @@ function CoreHero({ agents }) {
     <div className="panel hero-panel" ref={panelRef}>
       <div className="hero-glow" style={{ background: `radial-gradient(circle at 50% 50%, ${ACCENT}1c, transparent 60%), radial-gradient(circle at 50% 50%, ${ACCENT2}18, transparent 70%)` }} />
       <svg ref={svgRef} className="hero-network" viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <filter id="hero-glow-filter" x="-200%" y="-200%" width="500%" height="500%">
+            <feGaussianBlur stdDeviation="2.4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
         <path className="hero-ring hero-ring-outer" d={RING_PATH} fill="none" stroke={ACCENT2} strokeOpacity="0.22" strokeWidth="1" strokeDasharray="2 10" />
         <path className="hero-ring hero-ring-inner" d={RING2_PATH} fill="none" stroke={ACCENT} strokeOpacity="0.16" strokeWidth="1" strokeDasharray="1 7" />
 
         {/* Data flowing around the inner orbit -- two dots, offset in time, tracing the ring continuously. */}
         {[0, 0.5].map(offset => (
-          <circle key={`orbit-dot-${offset}`} r="2.2" fill={ACCENT} opacity="0.85">
+          <circle key={`orbit-dot-${offset}`} r="2.2" fill={ACCENT} opacity="0.85" filter="url(#hero-glow-filter)">
             <animateMotion dur="9s" begin={`${-offset * 9}s`} repeatCount="indefinite" path={RING2_PATH} />
           </circle>
         ))}
 
+        {/* Faint bond line as a guide, current visibly flowing along it via a scrolling
+            dash pattern -- the connection itself looks live, not just the electrons on it. */}
         {nodes.map((node, i) => (
-          <line key={`spoke-${i}`} x1={CX} y1={CY} x2={node.x} y2={node.y} stroke={node.color} strokeOpacity="0.3" strokeWidth="1" strokeDasharray="1 4" />
+          <line key={`spoke-${i}`} className="hero-spoke" x1={CX} y1={CY} x2={node.x} y2={node.y} stroke={node.color} strokeOpacity="0.22" strokeWidth="1" strokeDasharray="1 5" />
         ))}
 
-        {/* A pulse of "data" travels from the core out to each agent, continuously and
-            out of phase with its neighbors -- the network reads as actively working
-            rather than a static wiring diagram. */}
-        {nodes.map((node, i) => (
-          <circle key={`pulse-${i}`} r="2" fill="#fff8ec" opacity="0.9">
-            <animateMotion
-              dur={`${node.working ? 1.1 : 2.6}s`}
-              begin={`${i * 0.22}s`}
-              repeatCount="indefinite"
-              path={`M0,0 L${node.x - CX},${node.y - CY}`}
-            />
-            <animate attributeName="opacity" values="0;0.95;0" dur={`${node.working ? 1.1 : 2.6}s`} begin={`${i * 0.22}s`} repeatCount="indefinite" />
-          </circle>
-        ))}
+        {/* Two electrons per bond, weaving around the connection axis in a tapered sine
+            wave with opposite phase -- reads as an orbiting electron pair binding the
+            core to each agent, not a dot sliding down a wire. Faster and brighter while
+            that agent's state is "working". */}
+        {nodes.map((node, i) => {
+          const dx = node.x - CX, dy = node.y - CY;
+          const dur = node.working ? 1.4 : 3.2;
+          return (
+            <g key={`electrons-${i}`} transform={`translate(${CX},${CY})`}>
+              {[0, Math.PI].map((phase, e) => (
+                <circle key={e} r={node.working ? 2.3 : 1.8} fill={e === 0 ? '#fff8ec' : node.color} filter="url(#hero-glow-filter)">
+                  <animateMotion dur={`${dur}s`} begin={`${i * 0.22 + e * (dur / 2)}s`} repeatCount="indefinite" path={electronPath(dx, dy, 9, phase)} />
+                </circle>
+              ))}
+            </g>
+          );
+        })}
 
         <g className="hero-hub">
           <circle cx={CX} cy={CY} r="30" fill="rgba(240,180,60,0.08)" stroke={ACCENT} strokeWidth="1.3" />
