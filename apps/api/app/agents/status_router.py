@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AgentInvestigationRecord, AuditRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, OnboardingRecord, OperationsActivationRequestRecord, SalesLeadRecord, SalesOutreachDraftRecord
-from . import agent_inbox, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
+from ..models import AgentInvestigationRecord, AuditRecord, BackOfficeReportRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, OnboardingRecord, OperationsActivationRequestRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import agent_inbox, backoffice_agent, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -162,6 +162,26 @@ def agents_status() -> list[dict]:
             "state": operations_state,
             "last_activity_at": _iso(operations_activity),
             "last_status": "failed" if operations_state == "error" else ("completed" if operations_activity else None),
+        })
+
+        # Back Office mirrors Operations' audit-based status (no single "last sweep"
+        # record -- reconciliations + a report are touched per sweep).
+        backoffice_audit_latest = session.scalar(
+            select(AuditRecord).where(AuditRecord.type.like("backoffice_%")).order_by(AuditRecord.id.desc())
+        )
+        report_latest = session.scalar(select(BackOfficeReportRecord).order_by(BackOfficeReportRecord.id.desc()))
+        backoffice_activity = report_latest.created_at if report_latest else None
+        if backoffice_agent.is_sweep_in_progress():
+            backoffice_state = "working"
+        elif backoffice_audit_latest is not None and backoffice_audit_latest.type.endswith("_failed"):
+            backoffice_state = "error"
+        else:
+            backoffice_state = "idle"
+        results.append({
+            "agent": "backoffice",
+            "state": backoffice_state,
+            "last_activity_at": _iso(backoffice_activity),
+            "last_status": "failed" if backoffice_state == "error" else ("completed" if backoffice_activity else None),
         })
 
         return results

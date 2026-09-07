@@ -157,6 +157,42 @@ def test_get_prior_investigation_missing():
 
 # --- Central regression test: no excluded (PII / free-text) field ever leaks --------
 
+def test_list_recent_invoices_success(monkeypatch):
+    payload = {"data": [{
+        "id": "in_1", "status": "paid", "amount_due": 4900, "amount_paid": 4900, "currency": "eur",
+        "customer_email": "Cliente@Example.com", "created": 1700000000,
+    }]}
+    monkeypatch.setattr(stripe_tools, "_stripe_request", lambda method, path, **kwargs: FakeResponse(200, payload))
+
+    result = stripe_tools.list_recent_invoices("STRIPE_SECRET_KEY_VOLTARISOS")
+
+    assert result["invoices"][0]["id"] == "in_1"
+    assert result["invoices"][0]["status"] == "paid"
+    # Normalized for matching -- lowercased, whitespace stripped.
+    assert result["invoices"][0]["customer_email"] == "cliente@example.com"
+
+
+def test_list_recent_invoices_missing_email_is_none(monkeypatch):
+    payload = {"data": [{"id": "in_2", "status": "draft", "amount_due": 0, "amount_paid": 0, "currency": "eur", "created": 1700000000}]}
+    monkeypatch.setattr(stripe_tools, "_stripe_request", lambda method, path, **kwargs: FakeResponse(200, payload))
+
+    result = stripe_tools.list_recent_invoices("STRIPE_SECRET_KEY_VOLTARISOS")
+
+    assert result["invoices"][0]["customer_email"] is None
+
+
+def test_list_recent_invoices_network_failure(monkeypatch):
+    monkeypatch.setattr(stripe_tools, "_stripe_request", lambda method, path, **kwargs: None)
+    result = stripe_tools.list_recent_invoices("STRIPE_SECRET_KEY_VOLTARISOS")
+    assert "network/transport error" in result["error"]
+
+
+def test_list_recent_invoices_http_error(monkeypatch):
+    monkeypatch.setattr(stripe_tools, "_stripe_request", lambda method, path, **kwargs: FakeResponse(401, {}))
+    result = stripe_tools.list_recent_invoices("STRIPE_SECRET_KEY_VOLTARISOS")
+    assert result == {"error": "Stripe API returned 401"}
+
+
 def test_list_active_prices_success(monkeypatch):
     payload = {"data": [{
         "id": "price_1", "unit_amount": 4900, "currency": "eur",
@@ -242,6 +278,16 @@ _POISONED_PRICE = {
     "product": {"id": "prod_poison", "name": "Plan", "metadata": {"note": "MARKER_PRODUCT_METADATA"}},
 }
 
+_POISONED_INVOICE = {
+    "id": "in_poison", "status": "open", "amount_due": 100, "amount_paid": 0, "currency": "eur", "created": 1700000000,
+    "customer_email": "real-customer@example.com",  # deliberately allowlisted -- must survive, not a marker
+    "customer_name": "MARKER_INVOICE_CUSTOMER_NAME",
+    "description": "MARKER_INVOICE_DESCRIPTION",
+    "hosted_invoice_url": "https://MARKER_INVOICE_URL.example.com",
+    "account_name": "MARKER_INVOICE_ACCOUNT_NAME",
+    "metadata": {"note": "MARKER_INVOICE_METADATA"},
+}
+
 _MARKERS = [
     "MARKER_DESCRIPTION_TEXT", "MARKER_RECEIPT_EMAIL", "MARKER_RECEIPT_URL", "MARKER_METADATA_TEXT",
     "MARKER_BILLING_NAME", "MARKER_BILLING_EMAIL", "MARKER_LAST4", "MARKER_SELLER_MESSAGE",
@@ -250,6 +296,8 @@ _MARKERS = [
     "MARKER_STATEMENT_DESCRIPTOR", "MARKER_PAYOUT_METADATA", "MARKER_CANCELLATION_COMMENT",
     "MARKER_PRICE_NICKNAME", "MARKER_DEFAULT_PM_LAST4", "MARKER_SUB_METADATA",
     "MARKER_PRICE_METADATA", "MARKER_PRODUCT_METADATA",
+    "MARKER_INVOICE_CUSTOMER_NAME", "MARKER_INVOICE_DESCRIPTION", "MARKER_INVOICE_URL",
+    "MARKER_INVOICE_ACCOUNT_NAME", "MARKER_INVOICE_METADATA",
 ]
 
 
@@ -261,6 +309,7 @@ def test_no_excluded_field_ever_leaks_into_any_tool_result(monkeypatch):
             "/payouts": {"data": [_POISONED_PAYOUT]},
             "/subscriptions": {"data": [_POISONED_SUBSCRIPTION]},
             "/prices": {"data": [_POISONED_PRICE]},
+            "/invoices": {"data": [_POISONED_INVOICE]},
         }
         return FakeResponse(200, payload_by_path[path])
 
@@ -272,8 +321,12 @@ def test_no_excluded_field_ever_leaks_into_any_tool_result(monkeypatch):
         stripe_tools.list_recent_payouts(_job()),
         stripe_tools.list_subscriptions(_job()),
         stripe_tools.list_active_prices("STRIPE_SECRET_KEY_VOLTARISOS"),
+        stripe_tools.list_recent_invoices("STRIPE_SECRET_KEY_VOLTARISOS"),
     ]
 
     combined = str(results)
     for marker in _MARKERS:
         assert marker not in combined, f"excluded field leaked into tool result: {marker}"
+    # customer_email is deliberately allowlisted on invoices (the reconciliation match
+    # key) -- confirm it survived and wasn't accidentally stripped alongside the PII.
+    assert "real-customer@example.com" in combined
