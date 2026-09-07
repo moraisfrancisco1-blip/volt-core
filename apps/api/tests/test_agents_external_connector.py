@@ -62,6 +62,31 @@ def test_get_success_returns_data(monkeypatch):
     assert seen["params"] == {"a": 1}
 
 
+def test_get_uses_configured_header_and_scheme(monkeypatch):
+    # Not every service uses "Authorization: Bearer <key>" -- VoltarisOS's real API uses
+    # a custom header with a raw value instead (confirmed live 2026-09-07). This is what
+    # makes that configurable per-connector rather than hardcoded.
+    monkeypatch.setenv("TEST_CONNECTOR_KEY", "secret123")
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, base_url, timeout): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, path, headers=None, params=None):
+            seen["headers"] = headers
+            return FakeResponse(200, {"ok": True})
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    config = ExternalConnectorConfig(
+        name="test-system", base_url="https://example.test", api_key_env_var="TEST_CONNECTOR_KEY",
+        api_key_header="X-Custom-Key", api_key_scheme=None,
+    )
+    external_connector.get(config, "/api/thing")
+
+    assert seen["headers"] == {"X-Custom-Key": "secret123"}
+
+
 def test_get_http_error_status_surfaces_as_error(monkeypatch):
     monkeypatch.setenv("TEST_CONNECTOR_KEY", "secret123")
 

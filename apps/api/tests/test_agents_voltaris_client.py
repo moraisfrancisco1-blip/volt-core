@@ -7,6 +7,10 @@ def test_get_system_health_calls_the_real_confirmed_path(monkeypatch):
     result = voltaris_client.get_system_health()
     assert seen["path"] == "/api/admin/system-health"
     assert seen["config"].api_key_env_var == "VOLTARIS_SERVICE_KEY"
+    # Confirmed live 2026-09-07: VoltarisOS's real API rejects Authorization: Bearer
+    # (401, its normal end-user JWT path) and requires this custom raw-value header.
+    assert seen["config"].api_key_header == "X-Volt-Core-Key"
+    assert seen["config"].api_key_scheme is None
     assert result == {"data": {"status": "ok"}}
 
 
