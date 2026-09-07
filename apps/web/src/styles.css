@@ -80,6 +80,11 @@ h1, h2, h3, p { margin: 0; }
 .hero-ring-outer { animation: hero-ring-scan 14s linear infinite; }
 .hero-ring-inner { animation: hero-ring-scan-rev 10s linear infinite; }
 
+/* Current visibly flowing along each core-to-agent bond, independent of the electrons
+   riding on top of it. */
+@keyframes hero-spoke-flow { to { stroke-dashoffset: -60; } }
+.hero-spoke { animation: hero-spoke-flow 1.4s linear infinite; }
+
 /* The hub's own dashed ring spins continuously -- the core is always "on". */
 @keyframes hero-hub-spin { to { transform: rotate(360deg); } }
 .hero-hub-ring { transform-origin: 450px 150px; animation: hero-hub-spin 6s linear infinite; }
