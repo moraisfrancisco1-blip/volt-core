@@ -104,6 +104,12 @@ def test_get_system_monitoring_status_reads_system_record():
 def test_get_recent_audit_log_filters_by_reference_id():
     event_id = _seed_event("tools-audit-system")
     escalation_id = 424242
+    # This test's own event_id/escalation_id are freshly autoincremented, so they can
+    # coincidentally collide with an unrelated row's reference_id left behind elsewhere
+    # in a long shared-database test run -- clear the log first so the exact-match
+    # assertion below only ever sees what this test itself inserted.
+    with session_scope() as session:
+        session.query(AuditRecord).delete()
     with session_scope() as session:
         session.add(AuditRecord(type="voice_call_dispatched", reference_id=str(event_id), detail="attempt=1"))
         session.add(AuditRecord(type="escalation_priority_bumped", reference_id=str(escalation_id), detail="P3->P2"))

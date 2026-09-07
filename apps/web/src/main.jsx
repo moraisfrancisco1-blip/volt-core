@@ -17,6 +17,7 @@ import SalesPanel from './components/SalesPanel.jsx';
 import DealsPanel from './components/DealsPanel.jsx';
 import MarketingPanel from './components/MarketingPanel.jsx';
 import OperationsPanel from './components/OperationsPanel.jsx';
+import BackOfficePanel from './components/BackOfficePanel.jsx';
 import DetailModal from './components/DetailModal.jsx';
 import VoltCoreView from './components/views/VoltCoreView.jsx';
 import AgentsView from './components/views/AgentsView.jsx';
@@ -31,7 +32,7 @@ const INVESTIGATIONS_FETCH_LIMIT = 100;
 
 // Mirrors each reactive agent's investigation_type -- kept in sync manually with the
 // backend (apps/api/app/agents/*_runner.py and agents/status_router.py).
-const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations'];
+const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations', 'backoffice'];
 const AGENT_LABELS = {
   volt: ['VOLT', 'voice_call_failure'],
   dev_debug: ['DEV/DEBUG', 'code_diagnosis'],
@@ -43,6 +44,7 @@ const AGENT_LABELS = {
   deals: ['DEALS', null],
   marketing: ['MARKETING', null],
   operations: ['OPERATIONS', null],
+  backoffice: ['BACK OFFICE', null],
 };
 
 function truncate(text, max = 60) {
@@ -77,6 +79,8 @@ function App() {
   const [onboardings, setOnboardings] = useState([]);
   const [operationsActivations, setOperationsActivations] = useState([]);
   const [recurringTasks, setRecurringTasks] = useState([]);
+  const [backofficeReports, setBackofficeReports] = useState([]);
+  const [backofficeReconciliations, setBackofficeReconciliations] = useState([]);
   const [agentsStatus, setAgentsStatus] = useState([]);
   const [integrationsStatus, setIntegrationsStatus] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -86,7 +90,7 @@ function App() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
@@ -102,6 +106,8 @@ function App() {
         fetch(`${API}/api/onboardings?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/operations-activations?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/operations/recurring-tasks`, { cache: 'no-store' }),
+        fetch(`${API}/api/backoffice/reports?limit=5`, { cache: 'no-store' }),
+        fetch(`${API}/api/backoffice/reconciliations?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/agents/status`, { cache: 'no-store' }),
         fetch(`${API}/api/integrations/status`, { cache: 'no-store' }),
       ]);
@@ -120,6 +126,8 @@ function App() {
       if (!onboardingsResponse.ok) throw new Error(`onboardings unavailable (${onboardingsResponse.status})`);
       if (!operationsActivationsResponse.ok) throw new Error(`operations activations unavailable (${operationsActivationsResponse.status})`);
       if (!recurringTasksResponse.ok) throw new Error(`operations recurring tasks unavailable (${recurringTasksResponse.status})`);
+      if (!backofficeReportsResponse.ok) throw new Error(`backoffice reports unavailable (${backofficeReportsResponse.status})`);
+      if (!backofficeReconciliationsResponse.ok) throw new Error(`backoffice reconciliations unavailable (${backofficeReconciliationsResponse.status})`);
       if (!agentsStatusResponse.ok) throw new Error(`agent status unavailable (${agentsStatusResponse.status})`);
       if (!integrationsStatusResponse.ok) throw new Error(`integrations status unavailable (${integrationsStatusResponse.status})`);
       setDashboard(await dashboardResponse.json());
@@ -137,6 +145,8 @@ function App() {
       setOnboardings(await onboardingsResponse.json());
       setOperationsActivations(await operationsActivationsResponse.json());
       setRecurringTasks(await recurringTasksResponse.json());
+      setBackofficeReports(await backofficeReportsResponse.json());
+      setBackofficeReconciliations(await backofficeReconciliationsResponse.json());
       setAgentsStatus(await agentsStatusResponse.json());
       setIntegrationsStatus(await integrationsStatusResponse.json());
     } catch (err) {
@@ -181,6 +191,9 @@ function App() {
     } else if (agentId === 'operations') {
       const latestOnboarding = onboardings[0];
       lastActivityText = latestOnboarding ? truncate(`Onboarding — Deal #${latestOnboarding.deal_id} (${latestOnboarding.progress.done}/${latestOnboarding.progress.total})`) : '';
+    } else if (agentId === 'backoffice') {
+      const latestReport = backofficeReports[0];
+      lastActivityText = latestReport ? truncate(latestReport.summary) : '';
     } else {
       const latest = (investigationsByType[investigationType] || [])[0];
       lastActivityText = latest ? truncate((latest.status === 'failed' ? latest.error : latest.hypothesis) || 'sem resumo') : '';
@@ -252,6 +265,14 @@ function App() {
       { label: 'Parado', value: item.stalled ? 'sim' : 'não' },
       { label: 'Concluído em', value: item.completed_at || '—' },
       ...item.steps.map(step => ({ label: step.label, value: step.status === 'done' ? 'concluído' : step.requires_activation ? 'pendente (requer ativação aprovada)' : 'pendente' })),
+    ],
+  });
+  const openReconciliationDetail = item => setSelectedDetail({
+    title: `Reconciliação — Deal #${item.deal_id}`,
+    fields: [
+      { label: 'Fonte de dados', value: item.data_source }, { label: 'Correspondência encontrada', value: item.match_found ? 'sim' : 'não' },
+      { label: 'Fatura Stripe', value: item.stripe_invoice_id || '—' }, { label: 'Nota', value: item.note },
+      { label: 'Atualizado em', value: item.updated_at },
     ],
   });
 
@@ -363,6 +384,14 @@ function App() {
               load();
             }}
             onSelectOnboarding={openOnboardingDetail}
+          />
+        </div>
+
+        <div className="row-4">
+          <BackOfficePanel
+            report={backofficeReports[0] || null}
+            reconciliations={backofficeReconciliations}
+            onSelectReconciliation={openReconciliationDetail}
           />
         </div>
       </>

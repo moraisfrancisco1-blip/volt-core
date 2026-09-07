@@ -194,6 +194,39 @@ def get_prior_investigation(job: FinanceJob) -> dict:
         }
 
 
+def list_recent_invoices(stripe_key_env_var: str, limit: int = 100) -> dict:
+    # Not a FinanceJob-based tool -- called directly by the Back Office agent to
+    # reconcile closed deals against invoices, the same way list_active_prices is called
+    # directly by the Deals agent. customer_email is deliberately allowlisted here (unlike
+    # every other Stripe read in this file, which excludes it as PII) -- it's the only
+    # real, structured key this codebase has to match an invoice back to a sales lead,
+    # since deals store no Stripe object id. Every other free-text/PII field (name,
+    # address, memo, metadata, receipt/hosted urls) stays excluded.
+    limit = max(1, min(int(limit), 100))
+    response = _stripe_request(
+        "GET", "/invoices", api_key_env_var=stripe_key_env_var,
+        params={"limit": limit},
+    )
+    if response is None:
+        return {"error": "Stripe API request failed (network/transport error)"}
+    if response.status_code != 200:
+        return {"error": f"Stripe API returned {response.status_code}"}
+    return {
+        "invoices": [
+            {
+                "id": inv.get("id"),
+                "status": inv.get("status"),
+                "amount_due": inv.get("amount_due"),
+                "amount_paid": inv.get("amount_paid"),
+                "currency": inv.get("currency"),
+                "customer_email": (inv.get("customer_email") or "").strip().lower() or None,
+                "created": _epoch_to_iso(inv.get("created")),
+            }
+            for inv in response.json().get("data", [])
+        ]
+    }
+
+
 def list_active_prices(stripe_key_env_var: str, limit: int = 20) -> dict:
     # Not a FinanceJob-based tool -- called directly by the Deals agent to price a
     # proposal, the same way market_intelligence.py calls entsoe_client directly rather

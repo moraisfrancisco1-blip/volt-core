@@ -278,6 +278,29 @@ class RecurringTaskCheckpointRecord(Base):
     last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class BackOfficeReconciliationRecord(Base):
+    __tablename__ = "backoffice_reconciliations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    deal_id: Mapped[int] = mapped_column(Integer, index=True, unique=True)
+    data_source: Mapped[str] = mapped_column(String(32))  # "stripe_sandbox" | "no_source_configured" | "stripe_unavailable"
+    match_found: Mapped[bool] = mapped_column(Boolean, default=False)
+    stripe_invoice_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    note: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class BackOfficeReportRecord(Base):
+    __tablename__ = "backoffice_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    data_source: Mapped[str] = mapped_column(String(32))  # "stripe_sandbox" | "no_source_configured" | "stripe_unavailable"
+    deals_closed_count: Mapped[int] = mapped_column(Integer, default=0)
+    deals_matched_count: Mapped[int] = mapped_column(Integer, default=0)
+    deals_unmatched_count: Mapped[int] = mapped_column(Integer, default=0)
+    summary: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class TelegramScheduleRecord(Base):
     __tablename__ = "telegram_schedules"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
