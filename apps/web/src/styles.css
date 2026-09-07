@@ -18,7 +18,7 @@ h1, h2, h3, p { margin: 0; }
 
 /* Top bar */
 .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid rgba(240, 180, 60, 0.12); background: #120e0a; }
-.brand-mark { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, #f0b429, #7a4f11); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 14px rgba(240, 180, 60, 0.35); flex-shrink: 0; }
+.brand-mark { display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 0 8px rgba(240, 180, 60, 0.45)); flex-shrink: 0; }
 .brand-name { font-weight: 700; font-size: 16px; letter-spacing: 0.09em; color: #f0b429; line-height: 1; }
 .brand-sub { font-size: 9.5px; letter-spacing: 0.16em; color: #8a7c68; margin-top: 3px; }
 .system-pill { gap: 9px; padding: 7px 14px; border: 1px solid rgba(143, 196, 138, 0.35); border-radius: 20px; background: rgba(143, 196, 138, 0.07); }
