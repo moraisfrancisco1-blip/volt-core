@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import Sidebar from './components/Sidebar.jsx';
 import CoreHero from './components/CoreHero.jsx';
+import VoltMark from './components/VoltMark.jsx';
 import SystemOverview from './components/SystemOverview.jsx';
 import EventFeed from './components/EventFeed.jsx';
 import AgentGrid from './components/AgentGrid.jsx';
@@ -373,7 +374,7 @@ function App() {
       <header className="topbar">
         <div className="row" style={{ gap: 12 }}>
           <div className="brand-mark">
-            <svg width="16" height="16" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z" fill="#120e0a" /></svg>
+            <svg width="30" height="27" viewBox="0 0 110 100"><VoltMark id="topbar" /></svg>
           </div>
           <div>
             <div className="display brand-name">VOLT</div>

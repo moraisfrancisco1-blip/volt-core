@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import VoltMark from './VoltMark.jsx';
 
 const ACCENT = '#f0b429';
 const ACCENT2 = '#4f8fe0';
@@ -149,7 +150,7 @@ function CoreHero({ agents }) {
         <g className="hero-hub">
           <circle cx={CX} cy={CY} r="30" fill="rgba(240,180,60,0.08)" stroke={ACCENT} strokeWidth="1.3" />
           <circle className="hero-hub-ring" cx={CX} cy={CY} r="40" fill="none" stroke={ACCENT} strokeOpacity="0.4" strokeWidth="1" strokeDasharray="4 6" />
-          <path d="M13 2 4 14h6l-1 8 9-12h-6z" fill={ACCENT} transform={`translate(${CX - 8}, ${CY - 9}) scale(0.7)`} />
+          <g transform={`translate(${CX - 12}, ${CY - 11}) scale(0.22)`}><VoltMark id="hub" /></g>
         </g>
 
         {nodes.map((node, i) => {
