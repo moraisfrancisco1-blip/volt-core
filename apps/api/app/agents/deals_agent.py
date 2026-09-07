@@ -145,8 +145,13 @@ def _sync_expansion_signals_from_tenants() -> None:
     # each real tenant's real current plan for a human to look at and decide.
     result = voltaris_client.get_tenants()
     if "error" in result:
+        # "Not configured yet" is an expected, waiting-on-setup state, not a real
+        # failure -- a distinct audit type keeps status_router's dashboard status from
+        # painting Deals red just because VOLTARIS_SERVICE_KEY hasn't been set yet.
+        error_text = result["error"]
+        audit_type = "deal_expansion_sync_skipped" if error_text.endswith("not configured") else "deal_expansion_sync_failed"
         with session_scope() as session:
-            session.add(AuditRecord(type="deal_expansion_sync_failed", detail=result["error"][:500]))
+            session.add(AuditRecord(type=audit_type, detail=error_text[:500]))
         return
 
     raw = result.get("data")
