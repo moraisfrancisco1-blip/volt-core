@@ -101,11 +101,48 @@ function CloseSuggestionRow({ deal, apiBase, onUpdated }) {
   );
 }
 
-function DealsPanel({ deals, proposals, apiBase, onProposalUpdated, onDealUpdated, onSelectDeal }) {
+function ExpansionSignalRow({ signal, apiBase, onUpdated }) {
+  const [state, setState] = useState('idle'); // idle | marking | error
+
+  const markReviewed = async () => {
+    setState('marking');
+    try {
+      const response = await fetch(`${apiBase}/api/deal-expansion-signals/${signal.id}/mark-reviewed`, { method: 'POST' });
+      const payload = await response.json();
+      onUpdated(payload);
+      setState('idle');
+    } catch {
+      setState('error');
+      setTimeout(() => setState('idle'), 4000);
+    }
+  };
+
+  return (
+    <div className="panel-row-item" style={{ padding: 12, marginBottom: 8 }}>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+        <span className="agent-card-name">{signal.tenant_name}</span>
+        <span className="mono feed-item-time">plano: {signal.current_plan}</span>
+      </div>
+      <div className="feed-item-text" style={{ marginBottom: 8 }}>{signal.note}</div>
+      <button
+        type="button"
+        className="row panel-row-item command-row actionable command-row-button"
+        style={{ opacity: state === 'marking' ? 0.7 : 1 }}
+        onClick={markReviewed}
+        disabled={state === 'marking'}
+      >
+        <span className="command-label">{state === 'marking' ? 'A MARCAR…' : 'Marcar Revisto'}</span>
+      </button>
+    </div>
+  );
+}
+
+function DealsPanel({ deals, proposals, expansionSignals, apiBase, onProposalUpdated, onDealUpdated, onExpansionSignalUpdated, onSelectDeal }) {
   const stageCounts = STAGE_ORDER.map(stage => ({ stage, count: (deals || []).filter(d => d.stage === stage).length }));
   const pendingProposals = (proposals || []).filter(p => p.status === 'pending_approval').slice(0, 4);
   const staleDeals = (deals || []).filter(d => d.stale).slice(0, 4);
   const suggestedDeals = (deals || []).filter(d => d.suggested_stage).slice(0, 4);
+  const flaggedExpansions = (expansionSignals || []).filter(s => s.status === 'flagged').slice(0, 4);
 
   return (
     <div className="panel">
@@ -162,6 +199,13 @@ function DealsPanel({ deals, proposals, apiBase, onProposalUpdated, onDealUpdate
             )}
         </div>
       </div>
+
+      <div className="mono panel-title" style={{ margin: '16px 0 8px' }}>
+        OPORTUNIDADES DE EXPANSÃO -- tenants reais (VoltarisOS) {flaggedExpansions.length > 0 ? `(${flaggedExpansions.length})` : ''}
+      </div>
+      {flaggedExpansions.length === 0
+        ? <div className="empty-state">Sem oportunidades de expansão sinalizadas.</div>
+        : flaggedExpansions.map(s => <ExpansionSignalRow signal={s} apiBase={apiBase} onUpdated={onExpansionSignalUpdated} key={s.id} />)}
     </div>
   );
 }

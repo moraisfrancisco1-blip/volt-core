@@ -68,7 +68,7 @@ def test_run_system_sweep_finds_nothing_creates_no_event(monkeypatch):
     ]
     calls = []
 
-    def fake_call_model(client, messages):
+    def fake_call_model(client, messages, extra_tools=None):
         calls.append(messages)
         return responses[len(calls) - 1]
 
@@ -95,7 +95,7 @@ def test_run_system_sweep_raises_alert_creates_event(monkeypatch):
     ]
     calls = []
 
-    def fake_call_model(client, messages):
+    def fake_call_model(client, messages, extra_tools=None):
         calls.append(messages)
         return responses[len(calls) - 1]
 
@@ -130,7 +130,7 @@ def test_run_system_sweep_deduped_alert_is_recorded_as_deduped(monkeypatch):
     ]
     calls = []
 
-    def fake_call_model(client, messages):
+    def fake_call_model(client, messages, extra_tools=None):
         calls.append(messages)
         return responses[len(calls) - 1]
 
@@ -142,8 +142,51 @@ def test_run_system_sweep_deduped_alert_is_recorded_as_deduped(monkeypatch):
     assert sweep.event_action == "deduped"
 
 
+def test_run_system_sweep_offers_voltaris_tools_only_for_voltaris_os(monkeypatch):
+    _no_network_railway_calls(monkeypatch)
+    seen_tools = []
+
+    def fake_call_model(client, messages, extra_tools=None):
+        seen_tools.append(extra_tools)
+        return _fake_message([_tool_use("submit_sweep_result", {"summary": "ok"})], "tool_use")
+
+    monkeypatch.setattr(production_monitor, "_call_model", fake_call_model)
+
+    production_monitor.run_system_sweep(_job("voltaris-os"))
+    production_monitor.run_system_sweep(_job("some-other-system"))
+
+    assert seen_tools[0] and any(t["name"] == "get_voltaris_system_health" for t in seen_tools[0])
+    assert seen_tools[1] == []
+
+
+def test_run_system_sweep_dispatches_voltaris_tool_calls(monkeypatch):
+    from app.agents import voltaris_client
+    monkeypatch.setattr(voltaris_client, "get_alerts", lambda: {"data": {"alerts": []}})
+
+    responses = [
+        _fake_message([_tool_use("get_voltaris_alerts", {})], "tool_use"),
+        _fake_message([_tool_use("submit_sweep_result", {"summary": "No real platform alerts."})], "tool_use"),
+    ]
+    calls = []
+
+    def fake_call_model(client, messages, extra_tools=None):
+        calls.append(messages)
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(production_monitor, "_call_model", fake_call_model)
+
+    production_monitor.run_system_sweep(_job("voltaris-os"))
+
+    sweep = _latest_sweep("voltaris-os")
+    assert sweep.status == "completed"
+    assert sweep.summary == "No real platform alerts."
+    # The tool result for get_voltaris_alerts must have reached the model as real data.
+    tool_result_messages = [m for m in calls[-1] if m.get("role") == "user"]
+    assert any('"alerts": []' in str(m) for m in tool_result_messages)
+
+
 def test_run_system_sweep_no_tool_use_is_recorded_as_failed(monkeypatch):
-    monkeypatch.setattr(production_monitor, "_call_model", lambda client, messages: _fake_message([_text("uncertain")], "end_turn"))
+    monkeypatch.setattr(production_monitor, "_call_model", lambda client, messages, extra_tools=None: _fake_message([_text("uncertain")], "end_turn"))
     production_monitor.run_system_sweep(_job("prodmon-no-tool-use"))
     sweep = _latest_sweep("prodmon-no-tool-use")
     assert sweep.status == "failed"
@@ -151,7 +194,7 @@ def test_run_system_sweep_no_tool_use_is_recorded_as_failed(monkeypatch):
 
 
 def test_run_system_sweep_model_exception_is_recorded_as_failed_not_raised(monkeypatch):
-    def fake_call_model(client, messages):
+    def fake_call_model(client, messages, extra_tools=None):
         raise RuntimeError("simulated API failure")
 
     monkeypatch.setattr(production_monitor, "_call_model", fake_call_model)
@@ -163,7 +206,7 @@ def test_run_system_sweep_model_exception_is_recorded_as_failed_not_raised(monke
 
 def test_run_system_sweep_exceeds_max_turns_is_recorded_as_failed(monkeypatch):
     monkeypatch.setattr(production_monitor, "MAX_TURNS", 2)
-    monkeypatch.setattr(production_monitor, "_call_model", lambda client, messages: _fake_message([_tool_use("get_recent_deployments", {})], "tool_use"))
+    monkeypatch.setattr(production_monitor, "_call_model", lambda client, messages, extra_tools=None: _fake_message([_tool_use("get_recent_deployments", {})], "tool_use"))
     _no_network_railway_calls(monkeypatch)
 
     production_monitor.run_system_sweep(_job("prodmon-max-turns"))
@@ -180,7 +223,7 @@ def test_run_sweep_without_credentials_never_calls_model(monkeypatch):
     monkeypatch.setenv("RAILWAY_TOKEN", "fake-token")
     monkeypatch.setenv("VOLT_SYSTEM_RAILWAY", '{"prodmon-gated-system": {"projectId": "p", "serviceId": "s", "environmentId": "e"}}')
 
-    def spy(client, messages):
+    def spy(client, messages, extra_tools=None):
         raise AssertionError("_call_model must not be called without ANTHROPIC_API_KEY")
 
     monkeypatch.setattr(production_monitor, "_call_model", spy)
@@ -193,7 +236,7 @@ def test_run_sweep_skips_systems_without_a_railway_mapping(monkeypatch):
     monkeypatch.setenv("RAILWAY_TOKEN", "fake-token")
     monkeypatch.setenv("VOLT_SYSTEM_RAILWAY", '{"prodmon-unmapped": {"projectId": "", "serviceId": "", "environmentId": ""}}')
 
-    def spy(client, messages):
+    def spy(client, messages, extra_tools=None):
         raise AssertionError("_call_model must not be called for an unmapped system")
 
     monkeypatch.setattr(production_monitor, "_call_model", spy)

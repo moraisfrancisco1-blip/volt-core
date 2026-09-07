@@ -10,8 +10,8 @@ from sqlalchemy import select
 
 from .. import llm_client
 from ..db import session_scope
-from ..models import AuditRecord, DealProposalRecord, DealRecord, SalesLeadRecord, SalesOutreachDraftRecord
-from . import stripe_config, stripe_tools
+from ..models import AuditRecord, DealExpansionSignalRecord, DealProposalRecord, DealRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import stripe_config, stripe_tools, voltaris_client
 
 # Deals move at the same pace as the leads that feed them -- same cadence as the Sales
 # agent by default. max() floor keeps a misconfigured tiny value from turning this into
@@ -114,6 +114,10 @@ def _price_catalog_text() -> str:
 
 
 def _sync_deals_from_sales() -> None:
+    # New-business pipeline (full close cycle) is B2B-partner only -- a real backend audit
+    # of VoltarisOS confirmed there is no consumer acquisition funnel, so "tenant_signup"
+    # leads (real, already-converted tenants) never enter this pipeline; see
+    # _sync_expansion_signals_from_tenants for what happens to them instead.
     with session_scope() as session:
         existing_lead_ids = {row for row in session.scalars(select(DealRecord.lead_id)).all()}
         sent_draft_lead_ids = {
@@ -121,15 +125,61 @@ def _sync_deals_from_sales() -> None:
                 select(SalesOutreachDraftRecord.lead_id).where(SalesOutreachDraftRecord.status == "approved_sent")
             ).all()
         }
-        qualified_leads = session.scalars(select(SalesLeadRecord).where(SalesLeadRecord.status == "qualified")).all()
+        qualified_leads = session.scalars(
+            select(SalesLeadRecord).where(SalesLeadRecord.status == "qualified", SalesLeadRecord.lead_type == "b2b_partner")
+        ).all()
 
         for lead in qualified_leads:
             if lead.id in existing_lead_ids:
                 continue
-            if lead.lead_type == "b2b_partner" and lead.id not in sent_draft_lead_ids:
+            if lead.id not in sent_draft_lead_ids:
                 continue  # B2B partners only enter the pipeline once actually contacted
             session.add(DealRecord(lead_id=lead.id, stage="qualified"))
             existing_lead_ids.add(lead.id)
+
+
+def _sync_expansion_signals_from_tenants() -> None:
+    # Real tenants from VoltarisOS's own /api/admin/tenants -- surfaced as a lightweight
+    # signal for human review, never run through the deal-closing pipeline above. This
+    # never invents a price, a churn score, or an "opportunity" judgment -- it just lists
+    # each real tenant's real current plan for a human to look at and decide.
+    result = voltaris_client.get_tenants()
+    if "error" in result:
+        with session_scope() as session:
+            session.add(AuditRecord(type="deal_expansion_sync_failed", detail=result["error"][:500]))
+        return
+
+    raw = result.get("data")
+    if isinstance(raw, list):
+        tenants = raw
+    elif isinstance(raw, dict):
+        tenants = raw.get("tenants")
+    else:
+        tenants = None
+    if not isinstance(tenants, list):
+        with session_scope() as session:
+            session.add(AuditRecord(type="deal_expansion_sync_failed", detail="unexpected /api/admin/tenants response shape"))
+        return
+
+    with session_scope() as session:
+        existing_tenant_ids = {row for row in session.scalars(select(DealExpansionSignalRecord.tenant_id)).all()}
+        for tenant in tenants:
+            if not isinstance(tenant, dict):
+                continue
+            tenant_id = str(tenant.get("id") or tenant.get("tenant_id") or "").strip()
+            if not tenant_id or tenant_id in existing_tenant_ids:
+                continue
+            name = str(tenant.get("name") or tenant.get("company_name") or f"Tenant {tenant_id}")
+            plan = str(tenant.get("plan") or tenant.get("plan_name") or "desconhecido")
+            session.add(DealExpansionSignalRecord(
+                tenant_id=tenant_id,
+                tenant_name=name,
+                current_plan=plan,
+                note=f"Tenant real, plano atual: {plan}. Rever manualmente para possível oportunidade de upgrade -- nunca inventa preço, nunca fecha nada automaticamente.",
+                status="flagged",
+            ))
+            existing_tenant_ids.add(tenant_id)
+            session.add(AuditRecord(type="deal_expansion_signal_flagged", reference_id=tenant_id, detail=f"plan={plan}"))
 
 
 def _prepare_proposals_for_qualified_deals() -> None:
@@ -185,6 +235,7 @@ def run_deals_sweep() -> None:
     try:
         _sync_deals_from_sales()
         _prepare_proposals_for_qualified_deals()
+        _sync_expansion_signals_from_tenants()
     except Exception as exc:
         with session_scope() as session:
             session.add(AuditRecord(type="deals_sweep_failed", detail=f"{type(exc).__name__}: {str(exc)[:500]}"))

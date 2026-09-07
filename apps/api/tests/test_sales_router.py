@@ -6,12 +6,6 @@ from app.main import app
 from app.models import SalesLeadRecord, SalesOutreachDraftRecord
 
 
-def _auth_headers(monkeypatch, key="ci-secret-key"):
-    monkeypatch.setenv("VOLT_BOOTSTRAP_CLIENT", "ci-admin")
-    monkeypatch.setenv("VOLT_BOOTSTRAP_KEY", key)
-    return {"X-Volt-Key": key}
-
-
 def _seed_lead(**overrides) -> int:
     defaults = dict(lead_type="b2b_partner", status="qualified", name="Zon Installaties BV", email="router-test@example.com", consent_basis="b2b_legitimate_interest")
     defaults.update(overrides)
@@ -30,28 +24,6 @@ def _seed_draft(lead_id: int, **overrides) -> int:
         session.add(draft)
         session.flush()
         return draft.id
-
-
-# --- ingestion -----------------------------------------------------------------------------
-
-def test_ingest_lead_without_scope_is_rejected():
-    with TestClient(app) as client:
-        response = client.post("/api/sales-leads", json={"name": "Jan de Boer", "email": "jan@example.com"})
-        assert response.status_code == 401  # no X-Volt-Key at all
-
-
-def test_ingest_lead_forces_consumer_inbound_lead_type(monkeypatch):
-    headers = _auth_headers(monkeypatch)
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/sales-leads", headers=headers,
-            json={"name": "Jan de Boer", "email": "jan@example.com", "source": "demo_request", "context": "Pediu demo via site"},
-        )
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["lead_type"] == "consumer_inbound"
-        assert payload["consent_basis"] == "inbound_signup"
-        assert payload["status"] == "new"
 
 
 def test_list_and_get_leads(monkeypatch):

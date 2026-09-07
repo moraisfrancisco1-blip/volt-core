@@ -14,6 +14,7 @@ const AREAS = [
   ['regulation_summary', 'REGULAÇÃO'],
   ['price_signals_summary', 'SINAIS DE PREÇO'],
   ['industry_news_summary', 'NOTÍCIAS DO SETOR'],
+  ['platform_status_summary', 'ESTADO REAL DA PLATAFORMA'],
 ];
 
 function MarketIntelligencePanel({ reports }) {

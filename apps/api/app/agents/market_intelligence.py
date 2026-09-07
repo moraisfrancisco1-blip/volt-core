@@ -15,7 +15,7 @@ from .. import llm_client
 from ..db import session_scope
 from ..models import AuditRecord, MarketIntelligenceReportRecord
 from ..telegram import send_telegram_message
-from . import entsoe_client
+from . import entsoe_client, voltaris_client
 
 # Weekly by default (7 days) -- not a continuous alert loop like the Production Monitor,
 # this is a low-priority digest. max() floor keeps a misconfigured tiny value from
@@ -45,7 +45,7 @@ _NO_NEWS_TEXT = "sem novidades esta semana"
 SUBMIT_TOOL_NAME = "submit_market_intelligence_summary"
 SUBMIT_TOOL_SCHEMA: dict[str, Any] = {
     "name": SUBMIT_TOOL_NAME,
-    "description": "Submete o resumo semanal de inteligência de mercado, dividido pelas 4 áreas. Chama isto exatamente uma vez.",
+    "description": "Submete o resumo semanal de inteligência de mercado, dividido pelas 5 áreas. Chama isto exatamente uma vez.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -53,22 +53,23 @@ SUBMIT_TOOL_SCHEMA: dict[str, Any] = {
             "regulation_summary": {"type": "string", "description": f"Resumo de mudanças regulatórias holandesas, ou literalmente '{_NO_NEWS_TEXT}'."},
             "price_signals_summary": {"type": "string", "description": f"Resumo de tendências/anomalias nos preços ENTSO-E, ou literalmente '{_NO_NEWS_TEXT}'."},
             "industry_news_summary": {"type": "string", "description": f"Resumo de notícias do setor, ou literalmente '{_NO_NEWS_TEXT}'."},
+            "platform_status_summary": {"type": "string", "description": f"Resumo do estado real da plataforma VoltarisOS (system-health/production-readiness/alertas reais), ou literalmente '{_NO_NEWS_TEXT}' se os dados não estiverem disponíveis."},
         },
-        "required": ["competitors_summary", "regulation_summary", "price_signals_summary", "industry_news_summary"],
+        "required": ["competitors_summary", "regulation_summary", "price_signals_summary", "industry_news_summary", "platform_status_summary"],
     },
 }
 
 SYSTEM_PROMPT = (
     "És o Agente de Inteligência de Mercado do VOLT CORE, dedicado ao VoltarisOS "
-    "(plataforma de gestão energética doméstica para donos de solar/bateria/EV na "
-    "Holanda). És puramente informativo -- nunca executas nada, nunca contactas "
-    "ninguém, nunca publicas nada. A tua única saída é um resumo semanal em "
-    "português, direto, dividido em 4 áreas fixas. Nunca inventes dados: se não "
-    "tiveres informação genuína e fiável para uma área nesta semana, escreve "
-    f"literalmente '{_NO_NEWS_TEXT}' nessa área em vez de forçar conteúdo. Os "
-    "dados de preços e as fontes de regulação/notícias fornecidos abaixo já foram "
-    "recolhidos por outro processo -- baseia-te neles, não presumas dados "
-    "adicionais que não estejam no prompt."
+    "(plataforma B2B real de gestão de frota energética/VPP). És puramente "
+    "informativo -- nunca executas nada, nunca contactas ninguém, nunca publicas "
+    "nada. A tua única saída é um resumo semanal em português, direto, dividido em "
+    "5 áreas fixas. Nunca inventes dados: se não tiveres informação genuína e "
+    f"fiável para uma área nesta semana, escreve literalmente '{_NO_NEWS_TEXT}' "
+    "nessa área em vez de forçar conteúdo. Os dados de preços, as fontes de "
+    "regulação/notícias, e o estado real da plataforma VoltarisOS fornecidos "
+    "abaixo já foram recolhidos por outro processo -- baseia-te neles, não "
+    "presumas dados adicionais que não estejam no prompt."
 )
 
 
@@ -143,7 +144,19 @@ def _gather_price_signals_text() -> str:
     return "\n".join(lines)
 
 
-def _build_prompt(competitors: list[str], regulation_text: str, price_signals_text: str, industry_news_text: str) -> str:
+def _gather_platform_status_text() -> str:
+    health = voltaris_client.get_system_health()
+    readiness = voltaris_client.get_production_readiness()
+    alerts = voltaris_client.get_alerts()
+
+    parts = []
+    parts.append(f"### system-health\n{health['error']}" if "error" in health else f"### system-health\n{health.get('data')}")
+    parts.append(f"### production-readiness\n{readiness['error']}" if "error" in readiness else f"### production-readiness\n{readiness.get('data')}")
+    parts.append(f"### alerts ativos\n{alerts['error']}" if "error" in alerts else f"### alerts ativos\n{alerts.get('data')}")
+    return "\n\n".join(parts)
+
+
+def _build_prompt(competitors: list[str], regulation_text: str, price_signals_text: str, industry_news_text: str, platform_status_text: str) -> str:
     return (
         "Produz o resumo semanal de inteligência de mercado para o VoltarisOS.\n\n"
         f"## Concorrentes a acompanhar\n{', '.join(competitors)}\n"
@@ -151,7 +164,8 @@ def _build_prompt(competitors: list[str], regulation_text: str, price_signals_te
         f"sobre estes concorrentes específicos; caso contrário usa '{_NO_NEWS_TEXT}'.)\n\n"
         f"## Fontes de regulação holandesa (texto bruto recolhido)\n{regulation_text}\n\n"
         f"## Sinais de preço ENTSO-E\n{price_signals_text}\n\n"
-        f"## Fontes de notícias do setor (texto bruto recolhido)\n{industry_news_text}\n"
+        f"## Fontes de notícias do setor (texto bruto recolhido)\n{industry_news_text}\n\n"
+        f"## Estado real da plataforma VoltarisOS (dados reais, não sintéticos)\n{platform_status_text}\n"
     )
 
 
@@ -173,7 +187,8 @@ def _format_telegram_message(record_fields: dict[str, str]) -> str:
         f"Concorrência:\n{record_fields['competitors_summary']}\n\n"
         f"Regulação:\n{record_fields['regulation_summary']}\n\n"
         f"Sinais de preço:\n{record_fields['price_signals_summary']}\n\n"
-        f"Notícias do setor:\n{record_fields['industry_news_summary']}"
+        f"Notícias do setor:\n{record_fields['industry_news_summary']}\n\n"
+        f"Estado da plataforma VoltarisOS:\n{record_fields.get('platform_status_summary', '')}"
     )
 
 
@@ -186,8 +201,9 @@ def run_weekly_intelligence_sweep() -> None:
         regulation_text = _gather_regulation_text()
         price_signals_text = _gather_price_signals_text()
         industry_news_text = _gather_industry_news_text()
+        platform_status_text = _gather_platform_status_text()
 
-        prompt = _build_prompt(competitors, regulation_text, price_signals_text, industry_news_text)
+        prompt = _build_prompt(competitors, regulation_text, price_signals_text, industry_news_text, platform_status_text)
         response = _call_model(client, prompt)
 
         submitted = None
@@ -221,6 +237,7 @@ def _persist_success(submitted: dict[str, Any], response: Any) -> None:
                 regulation_summary=str(submitted.get("regulation_summary") or ""),
                 price_signals_summary=str(submitted.get("price_signals_summary") or ""),
                 industry_news_summary=str(submitted.get("industry_news_summary") or ""),
+                platform_status_summary=str(submitted.get("platform_status_summary") or ""),
                 model=MODEL,
                 turns_used=1,
                 input_tokens=response.input_tokens,

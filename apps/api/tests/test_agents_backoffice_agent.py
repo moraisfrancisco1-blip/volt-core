@@ -4,7 +4,7 @@ from app.models import AuditRecord, BackOfficeReconciliationRecord, BackOfficeRe
 
 
 def _seed_lead(**overrides) -> int:
-    defaults = dict(lead_type="consumer_inbound", status="qualified", name="Backoffice Test", email="backoffice-agent-test@example.com", consent_basis="inbound_signup")
+    defaults = dict(lead_type="tenant_signup", status="qualified", name="Backoffice Test", email="backoffice-agent-test@example.com", consent_basis="existing_customer_tenant")
     defaults.update(overrides)
     with session_scope() as session:
         lead = SalesLeadRecord(**defaults)

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.agents import entsoe_client, market_intelligence
+from app.agents import entsoe_client, market_intelligence, voltaris_client
 from app.db import session_scope
 from app.models import MarketIntelligenceReportRecord
 
@@ -36,6 +36,9 @@ def _latest_report() -> MarketIntelligenceReportRecord:
 def _no_network(monkeypatch):
     monkeypatch.setattr(market_intelligence, "_fetch_source", lambda url: "[no network in tests]")
     monkeypatch.setattr(entsoe_client, "fetch_entsoe_day_ahead_prices", lambda days=7: {"error": "no network in tests"})
+    monkeypatch.setattr(voltaris_client, "get_system_health", lambda: {"error": "no network in tests"})
+    monkeypatch.setattr(voltaris_client, "get_production_readiness", lambda: {"error": "no network in tests"})
+    monkeypatch.setattr(voltaris_client, "get_alerts", lambda: {"error": "no network in tests"})
 
 
 # --- _competitors ---------------------------------------------------------------------
@@ -81,6 +84,25 @@ def test_gather_price_signals_text_summarizes_by_day(monkeypatch):
     assert "média geral" in text
 
 
+# --- _gather_platform_status_text -------------------------------------------------------
+
+def test_gather_platform_status_text_includes_real_data(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_system_health", lambda: {"data": {"status": "healthy"}})
+    monkeypatch.setattr(voltaris_client, "get_production_readiness", lambda: {"data": {"ready": True}})
+    monkeypatch.setattr(voltaris_client, "get_alerts", lambda: {"data": []})
+    text = market_intelligence._gather_platform_status_text()
+    assert "healthy" in text
+    assert "ready" in text
+
+
+def test_gather_platform_status_text_reports_unconfigured_key(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_system_health", lambda: {"error": "VOLTARIS_SERVICE_KEY not configured"})
+    monkeypatch.setattr(voltaris_client, "get_production_readiness", lambda: {"error": "VOLTARIS_SERVICE_KEY not configured"})
+    monkeypatch.setattr(voltaris_client, "get_alerts", lambda: {"error": "VOLTARIS_SERVICE_KEY not configured"})
+    text = market_intelligence._gather_platform_status_text()
+    assert text.count("VOLTARIS_SERVICE_KEY not configured") == 3
+
+
 # --- run_weekly_intelligence_sweep -----------------------------------------------------
 
 def test_run_weekly_intelligence_sweep_persists_all_four_areas_and_sends_telegram(monkeypatch):
@@ -90,6 +112,7 @@ def test_run_weekly_intelligence_sweep_persists_all_four_areas_and_sends_telegra
         "regulation_summary": "sem novidades esta semana",
         "price_signals_summary": "Preços estáveis, sem anomalias.",
         "industry_news_summary": "sem novidades esta semana",
+        "platform_status_summary": "Plataforma VoltarisOS saudável.",
     }))
     telegram_calls = []
     monkeypatch.setattr(market_intelligence, "send_telegram_message", lambda text: telegram_calls.append(text) or True)
@@ -111,7 +134,7 @@ def test_run_weekly_intelligence_sweep_persists_all_four_areas_and_sends_telegra
 def test_run_weekly_intelligence_sweep_records_report_even_if_telegram_fails(monkeypatch):
     _no_network(monkeypatch)
     monkeypatch.setattr(market_intelligence, "_call_model", lambda client, prompt: _fake_message({
-        "competitors_summary": "x", "regulation_summary": "x", "price_signals_summary": "x", "industry_news_summary": "x",
+        "competitors_summary": "x", "regulation_summary": "x", "price_signals_summary": "x", "industry_news_summary": "x", "platform_status_summary": "x",
     }))
 
     def _boom(text):
@@ -192,7 +215,7 @@ def test_run_weekly_intelligence_sweep_one_dead_source_does_not_abort_the_sweep(
     monkeypatch.setattr(market_intelligence, "_fetch_source", lambda url: "[error] simulated failure")
     monkeypatch.setattr(entsoe_client, "fetch_entsoe_day_ahead_prices", lambda days=7: {"error": "no network in tests"})
     monkeypatch.setattr(market_intelligence, "_call_model", lambda client, prompt: _fake_message({
-        "competitors_summary": "x", "regulation_summary": "x", "price_signals_summary": "x", "industry_news_summary": "x",
+        "competitors_summary": "x", "regulation_summary": "x", "price_signals_summary": "x", "industry_news_summary": "x", "platform_status_summary": "x",
     }))
 
     market_intelligence.run_weekly_intelligence_sweep()  # must not raise

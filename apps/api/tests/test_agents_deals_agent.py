@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.agents import deals_agent, stripe_config, stripe_tools
+from app.agents import deals_agent, stripe_config, stripe_tools, voltaris_client
 from app.db import session_scope
-from app.models import DealProposalRecord, DealRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from app.models import AuditRecord, DealExpansionSignalRecord, DealProposalRecord, DealRecord, SalesLeadRecord, SalesOutreachDraftRecord
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +24,7 @@ def _tool_response(tool_name, input_dict):
 
 
 def _seed_lead(**overrides) -> int:
-    defaults = dict(lead_type="consumer_inbound", status="qualified", name="Jan de Boer", email="jan@example.com", consent_basis="inbound_signup")
+    defaults = dict(lead_type="b2b_partner", status="qualified", name="Jan de Boer", email="jan@example.com", consent_basis="b2b_legitimate_interest")
     defaults.update(overrides)
     with session_scope() as session:
         lead = SalesLeadRecord(**defaults)
@@ -89,13 +89,13 @@ def test_price_catalog_text_formats_real_prices(monkeypatch):
 
 # --- _sync_deals_from_sales ----------------------------------------------------------------
 
-def test_sync_creates_deal_for_qualified_consumer_lead():
-    lead_id = _seed_lead(lead_type="consumer_inbound", status="qualified", email="sync-consumer@example.com")
+def test_sync_never_creates_a_deal_for_a_tenant_signup_lead():
+    # Real tenants (already customers) never enter the deal-closing pipeline -- they get
+    # an expansion signal instead (see _sync_expansion_signals_from_tenants).
+    lead_id = _seed_lead(lead_type="tenant_signup", status="qualified", email="tenant-no-deal@example.com", consent_basis="existing_customer_tenant")
     deals_agent._sync_deals_from_sales()
     with session_scope() as session:
-        deal = session.scalar(select(DealRecord).where(DealRecord.lead_id == lead_id))
-        assert deal is not None
-        assert deal.stage == "qualified"
+        assert session.scalar(select(DealRecord).where(DealRecord.lead_id == lead_id)) is None
 
 
 def test_sync_skips_b2b_lead_without_sent_outreach():
@@ -116,11 +116,51 @@ def test_sync_creates_deal_for_b2b_lead_with_sent_outreach():
 
 def test_sync_is_idempotent():
     lead_id = _seed_lead(email="idempotent-deal@example.com")
+    with session_scope() as session:
+        session.add(SalesOutreachDraftRecord(lead_id=lead_id, subject="s", body="b", status="approved_sent"))
     deals_agent._sync_deals_from_sales()
     deals_agent._sync_deals_from_sales()
     with session_scope() as session:
         count = len(session.scalars(select(DealRecord).where(DealRecord.lead_id == lead_id)).all())
         assert count == 1
+
+
+# --- _sync_expansion_signals_from_tenants (real tenants, never invents a price) -----------
+
+def test_sync_expansion_signals_flags_real_tenants_never_invents_a_price(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"data": {"tenants": [{"id": "exp-1", "name": "Beta Grid BV", "plan": "starter"}]}})
+
+    deals_agent._sync_expansion_signals_from_tenants()
+
+    with session_scope() as session:
+        signal = session.scalar(select(DealExpansionSignalRecord).where(DealExpansionSignalRecord.tenant_id == "exp-1"))
+        assert signal is not None
+        assert signal.tenant_name == "Beta Grid BV"
+        assert signal.current_plan == "starter"
+        assert signal.status == "flagged"
+        assert "nunca inventa preço" in signal.note
+        assert "nunca fecha nada automaticamente" in signal.note
+
+
+def test_sync_expansion_signals_is_idempotent(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"data": {"tenants": [{"id": "exp-idem", "name": "Idem BV", "plan": "pro"}]}})
+
+    deals_agent._sync_expansion_signals_from_tenants()
+    deals_agent._sync_expansion_signals_from_tenants()
+
+    with session_scope() as session:
+        rows = session.scalars(select(DealExpansionSignalRecord).where(DealExpansionSignalRecord.tenant_id == "exp-idem")).all()
+        assert len(rows) == 1
+
+
+def test_sync_expansion_signals_no_key_configured_does_not_invent_a_tenant(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"error": "VOLTARIS_SERVICE_KEY not configured"})
+
+    deals_agent._sync_expansion_signals_from_tenants()  # must not raise
+
+    with session_scope() as session:
+        audit = session.scalar(select(AuditRecord).where(AuditRecord.type == "deal_expansion_sync_failed").order_by(AuditRecord.id.desc()))
+        assert audit is not None
 
 
 # --- _prepare_proposals_for_qualified_deals -------------------------------------------------

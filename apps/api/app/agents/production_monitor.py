@@ -14,6 +14,9 @@ from ..models import AuditRecord, MonitoringSweepRecord
 from .monitoring_alerts import RAISE_ALERT_SCHEMA, raise_monitoring_alert
 from .railway_config import resolve_railway_service, sweep_system_ids
 from .railway_tools import TOOL_HANDLERS, TOOL_SCHEMAS, ProductionSweepJob
+from . import voltaris_tools
+
+_VOLTARISOS_SYSTEM_ID = "voltaris-os"
 
 SWEEP_INTERVAL_SECONDS = max(60, int(os.getenv("VOLT_PRODMON_INTERVAL_SECONDS", "600")))
 MODEL = os.getenv("VOLT_PRODMON_MODEL") or llm_client.default_model()
@@ -67,19 +70,26 @@ def _call_tool_handler(handler: Any, job: ProductionSweepJob, raw_input: dict[st
     return handler(job, **filtered)
 
 
-def _call_model(client: llm_client.LLMClient, messages: list[dict[str, Any]]) -> Any:
+def _call_model(client: llm_client.LLMClient, messages: list[dict[str, Any]], extra_tools: list[dict[str, Any]] | None = None) -> Any:
     # The single seam tests substitute -- never touches the network once monkeypatched.
     return client.call(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
-        tools=[*TOOL_SCHEMAS, RAISE_ALERT_SCHEMA, SUBMIT_TOOL_SCHEMA],
+        tools=[*TOOL_SCHEMAS, *(extra_tools or []), RAISE_ALERT_SCHEMA, SUBMIT_TOOL_SCHEMA],
         messages=messages,
     )
 
 
 def run_system_sweep(job: ProductionSweepJob) -> None:
     messages: list[dict[str, Any]] = [{"role": "user", "content": _build_prompt(job)}]
+    # voltaris-os gets extra tools reading VoltarisOS's own real product API (system
+    # health, production readiness, alerts) alongside the generic Railway telemetry every
+    # system gets -- no other system has these, since they're specific to that product's
+    # own backend.
+    is_voltaris = job.system == _VOLTARISOS_SYSTEM_ID
+    extra_tools = voltaris_tools.TOOL_SCHEMAS if is_voltaris else []
+    extra_handlers = voltaris_tools.TOOL_HANDLERS if is_voltaris else {}
     # Sweep-scoped, not turn-scoped: raise_monitoring_alert and submit_sweep_result can
     # land on different turns, and the alert's outcome must survive until the submit.
     event_action = None
@@ -89,7 +99,7 @@ def run_system_sweep(job: ProductionSweepJob) -> None:
         # time. Inside the try so a missing-provider LLMConfigError degrades to a normal
         # _persist_failure, same as every other exception in this loop.
         for turn in range(MAX_TURNS):
-            response = _call_model(client, messages)
+            response = _call_model(client, messages, extra_tools)
             messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason != "tool_use":
@@ -112,7 +122,7 @@ def run_system_sweep(job: ProductionSweepJob) -> None:
                         event_action = "deduped"
                     created_event_id = result.get("event_id")
                 else:
-                    handler = TOOL_HANDLERS.get(block["name"])
+                    handler = TOOL_HANDLERS.get(block["name"]) or extra_handlers.get(block["name"])
                     result = _call_tool_handler(handler, job, block["input"]) if handler else {"error": f"unknown tool {block['name']}"}
                 tool_results.append({"type": "tool_result", "tool_use_id": block["id"], "content": json.dumps(result)})
 

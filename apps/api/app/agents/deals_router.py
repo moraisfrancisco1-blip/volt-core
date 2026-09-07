@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from .. import llm_client
 from ..db import session_scope
-from ..models import AuditRecord, DealProposalRecord, DealRecord, SalesLeadRecord
+from ..models import AuditRecord, DealExpansionSignalRecord, DealProposalRecord, DealRecord, SalesLeadRecord
 from . import deals_agent, resend_client
 
 router = APIRouter(prefix="/api", tags=["deals"])
@@ -15,6 +15,20 @@ router = APIRouter(prefix="/api", tags=["deals"])
 VALID_STAGES = {"qualified", "proposal_prepared", "negotiating", "closed_won", "closed_lost"}
 CLOSED_STAGES = {"closed_won", "closed_lost"}
 VALID_PROPOSAL_STATUSES = {"pending_approval", "approved_sent", "send_failed"}
+VALID_EXPANSION_SIGNAL_STATUSES = {"flagged", "reviewed"}
+
+
+def expansion_signal_dict(signal: DealExpansionSignalRecord) -> dict:
+    return {
+        "id": signal.id,
+        "tenant_id": signal.tenant_id,
+        "tenant_name": signal.tenant_name,
+        "current_plan": signal.current_plan,
+        "note": signal.note,
+        "status": signal.status,
+        "created_at": signal.created_at.isoformat() if signal.created_at else None,
+        "reviewed_at": signal.reviewed_at.isoformat() if signal.reviewed_at else None,
+    }
 
 
 class SuggestCloseRequest(BaseModel):
@@ -173,3 +187,40 @@ def approve_and_send_proposal(proposal_id: int) -> dict:
             proposal.error = "Resend send failed or not configured -- check RESEND_API_KEY/RESEND_FROM"
         session.add(AuditRecord(type="deal_proposal_approved_and_sent" if sent else "deal_proposal_send_failed", reference_id=str(proposal_id)))
         return proposal_dict(proposal)
+
+
+@router.get("/deal-expansion-signals")
+def list_deal_expansion_signals(limit: int = Query(default=50, ge=1, le=200), status: str | None = None) -> list[dict]:
+    with session_scope() as session:
+        statement = select(DealExpansionSignalRecord)
+        if status:
+            normalized = status.strip().lower()
+            if normalized not in VALID_EXPANSION_SIGNAL_STATUSES:
+                raise HTTPException(status_code=422, detail="invalid expansion signal status")
+            statement = statement.where(DealExpansionSignalRecord.status == normalized)
+        rows = session.scalars(statement.order_by(DealExpansionSignalRecord.id.desc()).limit(limit)).all()
+        return [expansion_signal_dict(row) for row in rows]
+
+
+@router.get("/deal-expansion-signals/{signal_id}")
+def get_deal_expansion_signal(signal_id: int) -> dict:
+    with session_scope() as session:
+        signal = session.get(DealExpansionSignalRecord, signal_id)
+        if signal is None:
+            raise HTTPException(status_code=404, detail="expansion signal not found")
+        return expansion_signal_dict(signal)
+
+
+@router.post("/deal-expansion-signals/{signal_id}/mark-reviewed")
+def mark_expansion_signal_reviewed(signal_id: int) -> dict:
+    # Pure bookkeeping -- a human confirms they looked at this signal. Never touches
+    # price, plan, or billing in any way; there is nothing here to execute.
+    with session_scope() as session:
+        signal = session.get(DealExpansionSignalRecord, signal_id)
+        if signal is None:
+            raise HTTPException(status_code=404, detail="expansion signal not found")
+        if signal.status != "reviewed":
+            signal.status = "reviewed"
+            signal.reviewed_at = datetime.now(timezone.utc)
+            session.add(AuditRecord(type="deal_expansion_signal_reviewed", reference_id=str(signal_id)))
+        return expansion_signal_dict(signal)
