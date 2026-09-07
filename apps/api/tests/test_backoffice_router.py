@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.db import session_scope
 from app.main import app
-from app.models import BackOfficeReconciliationRecord, BackOfficeReportRecord, DealRecord, SalesLeadRecord
+from app.models import AuditRecord, BackOfficeReconciliationRecord, BackOfficeReportRecord, DaiOakesPaymentRecord, DealRecord, SalesLeadRecord
 
 
 def _seed_lead(**overrides) -> int:
@@ -110,3 +110,65 @@ def test_trigger_backoffice_sweep_always_starts_no_llm_gate(monkeypatch):
         response = client.post("/api/backoffice/run")
         assert response.status_code == 200
         assert response.json()["triggered"] is True
+
+
+# --- Dai Oakes Payment Control -- real data, always source-labeled, never mixed in ---------
+
+def _seed_dai_oakes_payment(**overrides) -> int:
+    defaults = dict(external_id="pc_router_test", status="paid", amount=10.0, amount_paid=10.0, currency="eur")
+    defaults.update(overrides)
+    with session_scope() as session:
+        record = DaiOakesPaymentRecord(**defaults)
+        session.add(record)
+        session.flush()
+        return record.id
+
+
+def test_list_dai_oakes_payments_always_labels_source():
+    _seed_dai_oakes_payment(external_id="pc_label_test")
+
+    with TestClient(app) as client:
+        response = client.get("/api/backoffice/dai-oakes-payments")
+        assert response.status_code == 200
+        match = next(item for item in response.json() if item["external_id"] == "pc_label_test")
+        assert match["source"] == "dai_oakes_real"
+
+
+def test_payment_control_summary_with_no_data_says_so():
+    with session_scope() as session:
+        session.query(DaiOakesPaymentRecord).delete()
+        session.query(AuditRecord).filter(AuditRecord.type.like("dai_oakes%") | AuditRecord.type.like("backoffice_dai_oakes%")).delete(synchronize_session=False)
+
+    with TestClient(app) as client:
+        response = client.get("/api/backoffice/payment-control-summary")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 0
+        assert payload["security_incident"] is False
+
+
+def test_payment_control_summary_counts_paid_vs_pending():
+    with session_scope() as session:
+        session.query(DaiOakesPaymentRecord).delete()
+    _seed_dai_oakes_payment(external_id="pc_summary_paid", status="paid")
+    _seed_dai_oakes_payment(external_id="pc_summary_pending", status="pending")
+
+    with TestClient(app) as client:
+        response = client.get("/api/backoffice/payment-control-summary")
+        payload = response.json()
+        assert payload["total"] == 2
+        assert payload["paid"] == 1
+        assert payload["pending"] == 1
+        assert payload["source"] == "dai_oakes_real"
+
+
+def test_payment_control_summary_flags_security_incident_and_it_takes_priority():
+    with session_scope() as session:
+        session.query(DaiOakesPaymentRecord).delete()
+        session.add(AuditRecord(type="backoffice_dai_oakes_security_incident_failed", detail="unexpected field(s): clientName"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/backoffice/payment-control-summary")
+        payload = response.json()
+        assert payload["security_incident"] is True
+        assert "revisão humana" in payload["note"]

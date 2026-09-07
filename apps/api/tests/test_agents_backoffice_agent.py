@@ -1,6 +1,6 @@
-from app.agents import backoffice_agent, stripe_tools
+from app.agents import backoffice_agent, daioakes_client, stripe_tools
 from app.db import session_scope
-from app.models import AuditRecord, BackOfficeReconciliationRecord, BackOfficeReportRecord, DealRecord, SalesLeadRecord
+from app.models import AuditRecord, BackOfficeReconciliationRecord, BackOfficeReportRecord, DaiOakesPaymentRecord, DealRecord, SalesLeadRecord
 
 
 def _seed_lead(**overrides) -> int:
@@ -199,3 +199,100 @@ def test_sweep_failure_is_caught_and_audited(monkeypatch):
         audit = session.query(AuditRecord).filter_by(type="backoffice_sweep_failed").order_by(AuditRecord.id.desc()).first()
         assert audit is not None
         assert "boom" in audit.detail
+
+
+# --- Dai Oakes Payment Control: real data, own allowlist, own incident path --------------
+
+def test_dai_oakes_sync_no_key_configured_reports_skipped_not_failed(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_payment_control", lambda: {"error": "VOLT_CORE_SERVICE_KEY_DAIOAKES not configured"})
+
+    backoffice_agent._sync_dai_oakes_payments()  # must not raise
+
+    with session_scope() as session:
+        audit = session.query(AuditRecord).filter_by(type="dai_oakes_payment_sync_skipped").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+        assert session.query(DaiOakesPaymentRecord).count() == 0
+
+
+def test_dai_oakes_sync_stores_only_allowlisted_fields(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_payment_control", lambda: {"data": [
+        {"id": "pc_1", "status": "paid", "amount": 100.0, "amountPaid": 100.0, "currency": "eur", "dueDate": "2026-01-01", "paidAt": "2026-01-02", "stripeInvoiceId": "in_dai_1"},
+    ]})
+
+    backoffice_agent._sync_dai_oakes_payments()
+
+    with session_scope() as session:
+        record = session.query(DaiOakesPaymentRecord).filter_by(external_id="pc_1").one()
+        assert record.status == "paid"
+        assert record.amount == 100.0
+        assert record.stripe_invoice_id == "in_dai_1"
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_sync_completed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+
+
+def test_dai_oakes_sync_is_idempotent_and_updates_in_place(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_payment_control", lambda: {"data": [
+        {"id": "pc_idem", "status": "pending", "amount": 50.0, "amountPaid": 0, "currency": "eur"},
+    ]})
+    backoffice_agent._sync_dai_oakes_payments()
+
+    monkeypatch.setattr(daioakes_client, "get_payment_control", lambda: {"data": [
+        {"id": "pc_idem", "status": "paid", "amount": 50.0, "amountPaid": 50.0, "currency": "eur"},
+    ]})
+    backoffice_agent._sync_dai_oakes_payments()
+
+    with session_scope() as session:
+        records = session.query(DaiOakesPaymentRecord).filter_by(external_id="pc_idem").all()
+        assert len(records) == 1
+        assert records[0].status == "paid"
+
+
+def test_dai_oakes_sync_rejects_entire_batch_on_a_single_unexpected_field(monkeypatch):
+    # A red line, not a convenience filter: even one entry with one unexpected field
+    # (e.g. something clinical/PII-looking that shouldn't be there) must reject the
+    # WHOLE batch, not just drop that field and keep the rest.
+    monkeypatch.setattr(daioakes_client, "get_payment_control", lambda: {"data": [
+        {"id": "pc_safe", "status": "paid", "amount": 10.0},
+        {"id": "pc_bad", "status": "paid", "amount": 20.0, "clientName": "Someone Real"},
+    ]})
+
+    backoffice_agent._sync_dai_oakes_payments()
+
+    with session_scope() as session:
+        assert session.query(DaiOakesPaymentRecord).filter_by(external_id="pc_safe").count() == 0
+        assert session.query(DaiOakesPaymentRecord).filter_by(external_id="pc_bad").count() == 0
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_security_incident_failed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+        assert "clientName" in audit.detail
+        # The incident report must never contain the actual leaked value, only the field name.
+        assert "Someone Real" not in audit.detail
+
+
+def test_dai_oakes_sync_incident_never_touches_previously_synced_rows(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_payment_control", lambda: {"data": [{"id": "pc_prior", "status": "paid", "amount": 5.0}]})
+    backoffice_agent._sync_dai_oakes_payments()
+
+    monkeypatch.setattr(daioakes_client, "get_payment_control", lambda: {"data": [{"id": "pc_new", "status": "paid", "amount": 5.0, "patientName": "Someone"}]})
+    backoffice_agent._sync_dai_oakes_payments()
+
+    with session_scope() as session:
+        # The prior good row survives untouched; nothing from the bad batch was stored.
+        assert session.query(DaiOakesPaymentRecord).filter_by(external_id="pc_prior").count() == 1
+        assert session.query(DaiOakesPaymentRecord).filter_by(external_id="pc_new").count() == 0
+
+
+def test_dai_oakes_sync_malformed_response_shape_is_a_plain_failure_not_an_incident(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_payment_control", lambda: {"data": {"unexpected": "shape"}})
+
+    with session_scope() as session:
+        before_count = session.query(DaiOakesPaymentRecord).count()
+
+    backoffice_agent._sync_dai_oakes_payments()
+
+    with session_scope() as session:
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_sync_failed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+        # A malformed response must never add any row -- compare against the count just
+        # before this call rather than assuming a pristine table (other tests in this
+        # same shared-DB run legitimately insert their own Dai Oakes rows first).
+        assert session.query(DaiOakesPaymentRecord).count() == before_count

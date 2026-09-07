@@ -4,10 +4,12 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import BackOfficeReconciliationRecord, BackOfficeReportRecord
+from ..models import AuditRecord, BackOfficeReconciliationRecord, BackOfficeReportRecord, DaiOakesPaymentRecord
 from . import backoffice_agent
 
 router = APIRouter(prefix="/api", tags=["backoffice"])
+
+_PAID_STATUSES = {"paid", "succeeded"}
 
 
 def reconciliation_dict(record: BackOfficeReconciliationRecord) -> dict:
@@ -74,3 +76,68 @@ def get_report(report_id: int) -> dict:
 def trigger_backoffice_sweep() -> dict:
     threading.Thread(target=backoffice_agent.run_backoffice_sweep, daemon=True).start()
     return {"triggered": True}
+
+
+def _dai_oakes_payment_dict(record: DaiOakesPaymentRecord) -> dict:
+    return {
+        "id": record.id,
+        "external_id": record.external_id,
+        "status": record.status,
+        "amount": record.amount,
+        "amount_paid": record.amount_paid,
+        "currency": record.currency,
+        "due_date": record.due_date,
+        "paid_at": record.paid_at,
+        "source": "dai_oakes_real",
+        "synced_at": record.synced_at.isoformat() if record.synced_at else None,
+    }
+
+
+@router.get("/backoffice/dai-oakes-payments")
+def list_dai_oakes_payments(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
+    # Real Dai Oakes data, deliberately never joined against VoltarisOS's deals/leads --
+    # they are two unrelated businesses. Every row is explicitly source: "dai_oakes_real"
+    # so the frontend can never present it next to VoltarisOS sandbox data unlabeled.
+    with session_scope() as session:
+        rows = session.scalars(select(DaiOakesPaymentRecord).order_by(DaiOakesPaymentRecord.id.desc()).limit(limit)).all()
+        return [_dai_oakes_payment_dict(row) for row in rows]
+
+
+@router.get("/backoffice/payment-control-summary")
+def get_payment_control_summary() -> dict:
+    with session_scope() as session:
+        rows = session.scalars(select(DaiOakesPaymentRecord)).all()
+        # A security incident takes priority over any other status: as long as the most
+        # recent Dai Oakes sync audit entry is the incident type, this stays flagged even
+        # if payments were synced successfully before it -- a human has to look at this,
+        # not have it silently clear on the next successful sweep.
+        latest_audit = session.scalar(
+            select(AuditRecord).where(AuditRecord.type.like("backoffice_dai_oakes_%") | AuditRecord.type.like("dai_oakes_payment_sync_%")).order_by(AuditRecord.id.desc())
+        )
+        security_incident = latest_audit is not None and latest_audit.type == "backoffice_dai_oakes_security_incident_failed"
+
+        if security_incident:
+            source = "dai_oakes_real"
+            note = "Incidente de segurança: resposta da Dai Oakes continha um campo inesperado -- revisão humana necessária antes de continuar a sincronizar."
+        elif not rows and latest_audit is not None and latest_audit.type == "dai_oakes_payment_sync_skipped":
+            source = "no_source_configured"
+            note = "sem dados financeiros ainda (VOLT_CORE_SERVICE_KEY_DAIOAKES não configurada)"
+        elif not rows and latest_audit is not None and latest_audit.type == "backoffice_dai_oakes_sync_failed":
+            source = "dai_oakes_unavailable"
+            note = "Dai Oakes indisponível neste momento -- não foi possível verificar pagamentos."
+        elif not rows:
+            source = "no_source_configured"
+            note = "sem dados financeiros ainda"
+        else:
+            source = "dai_oakes_real"
+            note = None
+
+        paid = sum(1 for r in rows if (r.status or "").lower() in _PAID_STATUSES)
+        return {
+            "source": source,
+            "security_incident": security_incident,
+            "note": note,
+            "total": len(rows),
+            "paid": paid,
+            "pending": len(rows) - paid,
+        }
