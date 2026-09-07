@@ -201,8 +201,13 @@ def _sync_tenants_as_leads() -> None:
     # fictional "consumer_inbound" ingestion path.
     result = voltaris_client.get_tenants()
     if "error" in result:
+        # "Not configured yet" is an expected, waiting-on-setup state, not a real
+        # failure -- a distinct audit type keeps status_router's dashboard status from
+        # painting Sales red just because VOLTARIS_SERVICE_KEY hasn't been set yet.
+        error_text = result["error"]
+        audit_type = "sales_tenant_sync_skipped" if error_text.endswith("not configured") else "sales_tenant_sync_failed"
         with session_scope() as session:
-            session.add(AuditRecord(type="sales_tenant_sync_failed", detail=result["error"][:500]))
+            session.add(AuditRecord(type=audit_type, detail=error_text[:500]))
         return
 
     raw = result.get("data")

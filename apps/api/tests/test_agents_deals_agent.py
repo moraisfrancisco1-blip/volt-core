@@ -159,6 +159,20 @@ def test_sync_expansion_signals_no_key_configured_does_not_invent_a_tenant(monke
     deals_agent._sync_expansion_signals_from_tenants()  # must not raise
 
     with session_scope() as session:
+        # "not configured" is an expected, waiting-on-setup state -- logged as
+        # "_skipped", not "_failed", so it never paints Deals red on the dashboard
+        # just because VOLTARIS_SERVICE_KEY hasn't been set yet (see status_router.py).
+        audit = session.scalar(select(AuditRecord).where(AuditRecord.type == "deal_expansion_sync_skipped").order_by(AuditRecord.id.desc()))
+        assert audit is not None
+        assert session.scalar(select(AuditRecord).where(AuditRecord.type == "deal_expansion_sync_failed")) is None
+
+
+def test_sync_expansion_signals_genuine_api_error_is_reported_as_a_real_failure(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"error": "voltaris-os API returned 500"})
+
+    deals_agent._sync_expansion_signals_from_tenants()  # must not raise
+
+    with session_scope() as session:
         audit = session.scalar(select(AuditRecord).where(AuditRecord.type == "deal_expansion_sync_failed").order_by(AuditRecord.id.desc()))
         assert audit is not None
 

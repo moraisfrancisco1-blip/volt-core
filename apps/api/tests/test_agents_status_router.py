@@ -233,3 +233,29 @@ def test_deals_failed_audit_reports_error_when_not_in_progress(monkeypatch):
 
     assert results["deals"]["state"] == "error"
     assert results["deals"]["last_status"] == "failed"
+
+
+def test_sales_tenant_sync_skipped_does_not_report_error(monkeypatch):
+    # VOLTARIS_SERVICE_KEY not being configured yet is an expected, waiting-on-setup
+    # state, not a real failure -- it must never paint Sales red on the dashboard.
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
+    monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
+    monkeypatch.setattr(sales_agent, "_sweep_in_progress", False)
+    with session_scope() as session:
+        session.add(AuditRecord(type="sales_tenant_sync_skipped", detail="VOLTARIS_SERVICE_KEY not configured"))
+
+    results = {row["agent"]: row for row in agents_status()}
+
+    assert results["sales"]["state"] != "error"
+
+
+def test_deal_expansion_sync_skipped_does_not_report_error(monkeypatch):
+    monkeypatch.setattr(agent_inbox, "_current_message_type", None)
+    monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
+    monkeypatch.setattr(deals_agent, "_sweep_in_progress", False)
+    with session_scope() as session:
+        session.add(AuditRecord(type="deal_expansion_sync_skipped", detail="VOLTARIS_SERVICE_KEY not configured"))
+
+    results = {row["agent"]: row for row in agents_status()}
+
+    assert results["deals"]["state"] != "error"

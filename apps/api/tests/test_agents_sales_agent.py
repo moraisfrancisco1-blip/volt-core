@@ -238,9 +238,24 @@ def test_sync_tenants_handles_no_key_configured_without_inventing_a_tenant(monke
 
     with session_scope() as session:
         from app.models import AuditRecord
-        audit = session.scalar(select(AuditRecord).where(AuditRecord.type == "sales_tenant_sync_failed").order_by(AuditRecord.id.desc()))
+        # "not configured" is an expected, waiting-on-setup state -- logged as
+        # "_skipped", not "_failed", so it never paints Sales red on the dashboard
+        # just because VOLTARIS_SERVICE_KEY hasn't been set yet (see status_router.py).
+        audit = session.scalar(select(AuditRecord).where(AuditRecord.type == "sales_tenant_sync_skipped").order_by(AuditRecord.id.desc()))
         assert audit is not None
         assert "VOLTARIS_SERVICE_KEY" in audit.detail
+        assert session.scalar(select(AuditRecord).where(AuditRecord.type == "sales_tenant_sync_failed")) is None
+
+
+def test_sync_tenants_genuine_api_error_is_reported_as_a_real_failure(monkeypatch):
+    monkeypatch.setattr(voltaris_client, "get_tenants", lambda: {"error": "voltaris-os API returned 500"})
+
+    sales_agent._sync_tenants_as_leads()  # must not raise
+
+    with session_scope() as session:
+        from app.models import AuditRecord
+        audit = session.scalar(select(AuditRecord).where(AuditRecord.type == "sales_tenant_sync_failed").order_by(AuditRecord.id.desc()))
+        assert audit is not None
 
 
 def test_sync_tenants_missing_email_stores_empty_string_not_none(monkeypatch):
