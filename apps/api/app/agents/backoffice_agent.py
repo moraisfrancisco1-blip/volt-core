@@ -24,9 +24,20 @@ _NO_SOURCE_TEXT = "sem dados financeiros ainda"
 # money bookkeeping fields only, never a name/email/session/date-of-birth/clinical field.
 # This is a second, independent allowlist on top of what Dai Oakes's own API already
 # filters server-side (defense in depth, per the explicit red line for this connector).
+#
+# The second group below was reviewed and approved on 2026-09-08 after the first-ever
+# real sync flagged them as unexpected: all 13 fields observed were payment/billing
+# metadata (client id, invoice number, payment method, refund amount, Stripe status
+# mirrors, a "total" amount, a boolean verification flag, a boolean test-mode flag, and a
+# timestamp) -- nothing name/email/clinical-shaped. "problem" was deliberately held back
+# pending a shape check (see _summarize_unexpected_field_shapes) before a human decided
+# whether to allow it too.
 _DAIOAKES_PAYMENT_FIELD_ALLOWLIST = {
     "id", "invoiceId", "amount", "amountPaid", "currency", "status",
     "dueDate", "paidAt", "createdAt", "stripeInvoiceId", "stripePaymentIntentId",
+    "clientId", "invoiceNumber", "paymentMethod", "refundedAmount", "state",
+    "stripeCheckoutStatus", "stripePaymentIntentStatus", "total", "verified",
+    "isTest", "hasPayment", "lastStripeVerifiedAt",
 }
 
 
@@ -50,6 +61,38 @@ def _extract_safe_dai_oakes_entries(raw_entries) -> tuple[list[dict], list[str]]
         return [], sorted(unexpected)
     safe_entries = [{k: v for k, v in entry.items() if k in _DAIOAKES_PAYMENT_FIELD_ALLOWLIST} for entry in raw_entries]
     return safe_entries, []
+
+
+_MAX_DISTINCT_VALUES_TO_COUNT = 20
+
+
+def _summarize_unexpected_field_shapes(raw_entries: list[dict], unexpected_fields: list[str]) -> dict[str, dict]:
+    # Lets a human tell "free text" from "small fixed enum" apart for a still-unexpected
+    # field WITHOUT ever seeing (or us ever storing/logging) a single actual value --
+    # only aggregate shape facts: which Python type(s) appear, string length range, and a
+    # distinct-value count capped at _MAX_DISTINCT_VALUES_TO_COUNT (above the cap we only
+    # say "more than N", since the count itself becomes a values-list proxy at high
+    # cardinality e.g. near-unique free text).
+    shapes: dict[str, dict] = {}
+    for field in unexpected_fields:
+        values = [entry[field] for entry in raw_entries if isinstance(entry, dict) and field in entry]
+        if not values:
+            continue
+        shape: dict = {
+            "observed_in": len(values),
+            "python_types": sorted({type(v).__name__ for v in values}),
+        }
+        str_values = [v for v in values if isinstance(v, str)]
+        if str_values:
+            shape["min_length"] = min(len(v) for v in str_values)
+            shape["max_length"] = max(len(v) for v in str_values)
+        hashable_values = {v for v in values if v is None or isinstance(v, (str, int, float, bool))}
+        if len(hashable_values) <= _MAX_DISTINCT_VALUES_TO_COUNT:
+            shape["distinct_value_count"] = len(hashable_values)
+        else:
+            shape["distinct_value_count"] = f"more than {_MAX_DISTINCT_VALUES_TO_COUNT}"
+        shapes[field] = shape
+    return shapes
 
 
 def _sync_dai_oakes_payments() -> None:
@@ -86,7 +129,11 @@ def _sync_dai_oakes_payments() -> None:
             # unstructured string).
             session.add(AuditRecord(
                 type="backoffice_dai_oakes_security_incident_failed",
-                detail=json.dumps({"unexpected_fields": unexpected_fields, "entries_affected": len(raw_entries)}),
+                detail=json.dumps({
+                    "unexpected_fields": unexpected_fields,
+                    "entries_affected": len(raw_entries),
+                    "unexpected_field_shapes": _summarize_unexpected_field_shapes(raw_entries, unexpected_fields),
+                }),
             ))
             return
 

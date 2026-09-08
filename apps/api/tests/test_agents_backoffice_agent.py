@@ -273,6 +273,42 @@ def test_dai_oakes_sync_rejects_entire_batch_on_a_single_unexpected_field(monkey
         payload = json.loads(audit.detail)
         assert payload["unexpected_fields"] == ["clientName"]
         assert payload["entries_affected"] == 2  # the whole batch, including the one safe entry
+        # Shape only, never the actual value -- lets a human tell free text from a small
+        # fixed enum apart without the incident report ever containing "Someone Real".
+        shape = payload["unexpected_field_shapes"]["clientName"]
+        assert shape["python_types"] == ["str"]
+        assert shape["min_length"] == len("Someone Real")
+        assert shape["max_length"] == len("Someone Real")
+        assert shape["distinct_value_count"] == 1
+
+
+def test_summarize_unexpected_field_shapes_reports_type_length_and_distinct_count_never_values():
+    raw_entries = [
+        {"id": "a", "problem": "card_declined"},
+        {"id": "b", "problem": "insufficient_funds"},
+        {"id": "c", "problem": "card_declined"},
+        {"id": "d"},  # field absent on this entry -- must not be counted as a value
+    ]
+
+    shapes = backoffice_agent._summarize_unexpected_field_shapes(raw_entries, ["problem"])
+
+    shape = shapes["problem"]
+    assert shape["observed_in"] == 3
+    assert shape["python_types"] == ["str"]
+    assert shape["min_length"] == len("card_declined")
+    assert shape["max_length"] == len("insufficient_funds")
+    assert shape["distinct_value_count"] == 2
+    detail_json = json.dumps(shapes)
+    assert "card_declined" not in detail_json
+    assert "insufficient_funds" not in detail_json
+
+
+def test_summarize_unexpected_field_shapes_caps_distinct_count_for_high_cardinality_text():
+    raw_entries = [{"id": str(i), "note": f"unique text {i}"} for i in range(30)]
+
+    shapes = backoffice_agent._summarize_unexpected_field_shapes(raw_entries, ["note"])
+
+    assert shapes["note"]["distinct_value_count"] == "more than 20"
 
 
 def test_dai_oakes_sync_incident_never_touches_previously_synced_rows(monkeypatch):

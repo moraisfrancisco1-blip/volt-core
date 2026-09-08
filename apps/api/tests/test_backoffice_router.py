@@ -198,6 +198,34 @@ def test_payment_control_summary_security_incident_names_field_and_count():
         assert "3" in payload["note"]
 
 
+def test_payment_control_summary_exposes_field_shapes_when_present():
+    with session_scope() as session:
+        session.query(DaiOakesPaymentRecord).delete()
+        session.add(AuditRecord(
+            type="backoffice_dai_oakes_security_incident_failed",
+            detail=json.dumps({
+                "unexpected_fields": ["problem"],
+                "entries_affected": 5,
+                "unexpected_field_shapes": {"problem": {"observed_in": 5, "python_types": ["str"], "min_length": 3, "max_length": 20, "distinct_value_count": 2}},
+            }),
+        ))
+
+    with TestClient(app) as client:
+        response = client.get("/api/backoffice/payment-control-summary")
+        payload = response.json()
+        assert payload["field_shapes"] == {"problem": {"observed_in": 5, "python_types": ["str"], "min_length": 3, "max_length": 20, "distinct_value_count": 2}}
+
+
+def test_payment_control_summary_field_shapes_is_none_when_absent():
+    with session_scope() as session:
+        session.query(DaiOakesPaymentRecord).delete()
+        session.add(AuditRecord(type="backoffice_dai_oakes_security_incident_failed", detail="unexpected field(s): clientName"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/backoffice/payment-control-summary")
+        assert response.json()["field_shapes"] is None
+
+
 def test_payment_control_summary_distinguishes_connector_failure_from_no_data():
     # A real connectivity failure (wrong URL, timeout, non-200 from Dai Oakes) must never
     # look the same as "not configured yet" or "no payments yet" -- it needs its own

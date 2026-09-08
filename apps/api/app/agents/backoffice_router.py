@@ -117,13 +117,15 @@ def get_payment_control_summary() -> dict:
         )
         security_incident = latest_audit is not None and latest_audit.type == "backoffice_dai_oakes_security_incident_failed"
 
+        field_shapes: dict | None = None
         if security_incident:
             source = "dai_oakes_real"
-            # Field NAMES only, never values -- backoffice_agent already enforces that
-            # guarantee when it writes the audit detail; this just surfaces it on the
-            # dashboard instead of requiring the authenticated /api/v1/audit endpoint to
-            # see what triggered the incident. Falls back to the older generic wording
-            # for any pre-existing incident row written before detail became JSON.
+            # Field NAMES (and, below, aggregate shape facts) only, never values --
+            # backoffice_agent already enforces that guarantee when it writes the audit
+            # detail; this just surfaces it on the dashboard instead of requiring the
+            # authenticated /api/v1/audit endpoint to see what triggered the incident.
+            # Falls back to the older generic wording for any pre-existing incident row
+            # written before detail became JSON.
             note = "Incidente de segurança: resposta da Dai Oakes continha um campo inesperado -- revisão humana necessária antes de continuar a sincronizar."
             try:
                 incident_detail = json.loads(latest_audit.detail or "")
@@ -134,6 +136,7 @@ def get_payment_control_summary() -> dict:
                     f"continham campo(s) inesperado(s) ({', '.join(fields)}) -- revisão humana necessária "
                     "antes de continuar a sincronizar."
                 )
+                field_shapes = incident_detail.get("unexpected_field_shapes") or None
             except (TypeError, ValueError, KeyError):
                 pass
         elif not rows and latest_audit is not None and latest_audit.type == "dai_oakes_payment_sync_skipped":
@@ -154,6 +157,7 @@ def get_payment_control_summary() -> dict:
             "source": source,
             "security_incident": security_incident,
             "note": note,
+            "field_shapes": field_shapes,
             "total": len(rows),
             "paid": paid,
             "pending": len(rows) - paid,
