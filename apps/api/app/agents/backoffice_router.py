@@ -122,9 +122,9 @@ def get_payment_control_summary() -> dict:
         elif not rows and latest_audit is not None and latest_audit.type == "dai_oakes_payment_sync_skipped":
             source = "no_source_configured"
             note = "sem dados financeiros ainda (VOLT_CORE_SERVICE_KEY_DAIOAKES não configurada)"
-        elif not rows and latest_audit is not None and latest_audit.type == "backoffice_dai_oakes_sync_failed":
+        elif not rows and latest_audit is not None and latest_audit.type in ("backoffice_dai_oakes_sync_failed", "dai_oakes_payment_sync_failed"):
             source = "dai_oakes_unavailable"
-            note = "Dai Oakes indisponível neste momento -- não foi possível verificar pagamentos."
+            note = f"Dai Oakes indisponível neste momento -- não foi possível verificar pagamentos ({latest_audit.detail})." if latest_audit.detail else "Dai Oakes indisponível neste momento -- não foi possível verificar pagamentos."
         elif not rows:
             source = "no_source_configured"
             note = "sem dados financeiros ainda"
