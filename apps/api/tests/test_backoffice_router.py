@@ -172,3 +172,19 @@ def test_payment_control_summary_flags_security_incident_and_it_takes_priority()
         payload = response.json()
         assert payload["security_incident"] is True
         assert "revisão humana" in payload["note"]
+
+
+def test_payment_control_summary_distinguishes_connector_failure_from_no_data():
+    # A real connectivity failure (wrong URL, timeout, non-200 from Dai Oakes) must never
+    # look the same as "not configured yet" or "no payments yet" -- it needs its own
+    # source label so a human knows to go check the connection, not just wait for data.
+    with session_scope() as session:
+        session.query(DaiOakesPaymentRecord).delete()
+        session.add(AuditRecord(type="dai_oakes_payment_sync_failed", detail="dai-oakes API returned 503"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/backoffice/payment-control-summary")
+        payload = response.json()
+        assert payload["source"] == "dai_oakes_unavailable"
+        assert payload["security_incident"] is False
+        assert "503" in payload["note"]
