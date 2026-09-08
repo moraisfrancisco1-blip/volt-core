@@ -25,19 +25,21 @@ _NO_SOURCE_TEXT = "sem dados financeiros ainda"
 # This is a second, independent allowlist on top of what Dai Oakes's own API already
 # filters server-side (defense in depth, per the explicit red line for this connector).
 #
-# The second group below was reviewed and approved on 2026-09-08 after the first-ever
-# real sync flagged them as unexpected: all 13 fields observed were payment/billing
-# metadata (client id, invoice number, payment method, refund amount, Stripe status
-# mirrors, a "total" amount, a boolean verification flag, a boolean test-mode flag, and a
-# timestamp) -- nothing name/email/clinical-shaped. "problem" was deliberately held back
-# pending a shape check (see _summarize_unexpected_field_shapes) before a human decided
-# whether to allow it too.
+# The second and third groups below were reviewed and approved on 2026-09-08 after the
+# first-ever real sync flagged 13 fields as unexpected: all are payment/billing metadata
+# (client id, invoice number, payment method, refund amount, Stripe status mirrors, a
+# "total" amount, boolean verification/test-mode flags, a timestamp) -- nothing
+# name/email/clinical-shaped. "problem" was held back one extra round specifically: a
+# shape check (_summarize_unexpected_field_shapes, never the actual value) showed it's
+# always exactly 12 characters or null, with only 2 distinct values across all 121
+# records -- a small fixed enum/code, not free text -- and was approved on that basis.
 _DAIOAKES_PAYMENT_FIELD_ALLOWLIST = {
     "id", "invoiceId", "amount", "amountPaid", "currency", "status",
     "dueDate", "paidAt", "createdAt", "stripeInvoiceId", "stripePaymentIntentId",
     "clientId", "invoiceNumber", "paymentMethod", "refundedAmount", "state",
     "stripeCheckoutStatus", "stripePaymentIntentStatus", "total", "verified",
     "isTest", "hasPayment", "lastStripeVerifiedAt",
+    "problem",
 }
 
 
