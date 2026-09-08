@@ -1,3 +1,5 @@
+import json
+
 from app.agents import backoffice_agent, daioakes_client, stripe_tools
 from app.db import session_scope
 from app.models import AuditRecord, BackOfficeReconciliationRecord, BackOfficeReportRecord, DaiOakesPaymentRecord, DealRecord, SalesLeadRecord
@@ -266,6 +268,11 @@ def test_dai_oakes_sync_rejects_entire_batch_on_a_single_unexpected_field(monkey
         assert "clientName" in audit.detail
         # The incident report must never contain the actual leaked value, only the field name.
         assert "Someone Real" not in audit.detail
+        # Structured (JSON) so the dashboard can show the field name(s) and how many
+        # records were affected without fragile free-text parsing.
+        payload = json.loads(audit.detail)
+        assert payload["unexpected_fields"] == ["clientName"]
+        assert payload["entries_affected"] == 2  # the whole batch, including the one safe entry
 
 
 def test_dai_oakes_sync_incident_never_touches_previously_synced_rows(monkeypatch):
