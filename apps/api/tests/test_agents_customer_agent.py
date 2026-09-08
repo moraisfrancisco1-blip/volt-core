@@ -88,7 +88,7 @@ def test_triage_keyword_hit_escalates_without_calling_model(monkeypatch):
 
 def test_triage_simple_question_via_model_marks_simple(monkeypatch):
     query_id = _seed_query(question="Qual é o consumo médio de um carregador EV?")
-    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         customer_agent.SUBMIT_TRIAGE_TOOL_NAME, {"classification": "simple"},
     ))
 
@@ -99,9 +99,29 @@ def test_triage_simple_question_via_model_marks_simple(monkeypatch):
     assert query.classification == "simple"
 
 
+def test_triage_calls_the_cheap_classification_model_not_the_draft_model(monkeypatch):
+    # Triage is a binary classification call, not prose the customer will ever read --
+    # it must run on the cheap tier, kept distinct from the (more expensive) model used
+    # to actually write response drafts.
+    query_id = _seed_query(question="Qual é o consumo médio de um carregador EV?")
+    captured = {}
+
+    def fake_call_model(system, prompt, schema, name, **kwargs):
+        captured["model"] = kwargs.get("model")
+        return _tool_response(customer_agent.SUBMIT_TRIAGE_TOOL_NAME, {"classification": "simple"})
+
+    monkeypatch.setattr(customer_agent, "_call_model", fake_call_model)
+
+    customer_agent._triage_new_queries()
+
+    assert captured["model"] == customer_agent.MODEL_TRIAGE
+    assert customer_agent.MODEL_TRIAGE != customer_agent.MODEL
+    assert _get_query(query_id).status == "simple"
+
+
 def test_triage_model_sensitive_classification_escalates(monkeypatch):
     query_id = _seed_query(question="O sistema parece estranho hoje")
-    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         customer_agent.SUBMIT_TRIAGE_TOOL_NAME, {"classification": "sensitive", "sensitive_reason": "tom ambíguo, melhor rever"},
     ))
 
@@ -114,7 +134,7 @@ def test_triage_model_sensitive_classification_escalates(monkeypatch):
 
 def test_triage_unexpected_classification_value_fails_safe_to_sensitive(monkeypatch):
     query_id = _seed_query(question="pergunta qualquer")
-    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         customer_agent.SUBMIT_TRIAGE_TOOL_NAME, {"classification": "unknown_value"},
     ))
 
@@ -125,7 +145,7 @@ def test_triage_unexpected_classification_value_fails_safe_to_sensitive(monkeypa
 
 def test_triage_model_failure_fails_safe_to_sensitive_not_stuck_unreviewed(monkeypatch):
     query_id = _seed_query(question="pergunta qualquer")
-    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name: SimpleNamespace(
+    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: SimpleNamespace(
         content=[{"type": "text", "text": "uncertain"}], stop_reason="end_turn", input_tokens=10, output_tokens=5,
     ))
 
@@ -139,7 +159,7 @@ def test_triage_model_failure_fails_safe_to_sensitive_not_stuck_unreviewed(monke
 def test_triage_model_exception_fails_safe_via_audit_not_silent(monkeypatch):
     query_id = _seed_query(question="pergunta qualquer")
 
-    def _boom(system, prompt, schema, name):
+    def _boom(system, prompt, schema, name, **kwargs):
         raise RuntimeError("simulated failure")
 
     monkeypatch.setattr(customer_agent, "_call_model", _boom)
@@ -158,7 +178,7 @@ def test_triage_one_failure_does_not_abort_the_rest(monkeypatch):
     bad_id = _seed_query(question="outra pergunta qualquer")
     calls = []
 
-    def fake_call_model(system, prompt, schema, name):
+    def fake_call_model(system, prompt, schema, name, **kwargs):
         calls.append(prompt)
         if str(bad_id) in prompt or "outra pergunta" in prompt:
             raise RuntimeError("simulated model failure")
@@ -177,7 +197,7 @@ def test_generate_draft_only_for_simple_queries(monkeypatch):
     simple_id = _seed_query(question="Pergunta simples", status="simple", classification="simple")
     sensitive_id = _seed_query(question="Reclamação", status="sensitive_escalated", classification="sensitive", sensitive_reason="reclamação/queixa")
     monkeypatch.setattr(customer_agent, "_fetch_product_facts", lambda: ("### README.md\nO VoltarisOS suporta carregamento inteligente de EV.", ["README.md"]))
-    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         customer_agent.SUBMIT_RESPONSE_TOOL_NAME, {"subject": "Re: a sua pergunta", "body": "Resposta com factos reais."},
     ))
 
@@ -187,6 +207,36 @@ def test_generate_draft_only_for_simple_queries(monkeypatch):
     assert len(simple_drafts) == 1
     assert simple_drafts[0].status == "pending_approval"
     assert _drafts_for(sensitive_id) == []
+
+
+def test_generate_draft_caches_the_facts_block_and_uses_the_draft_model(monkeypatch):
+    # The README/docs blob is identical for every pending query in the same sweep --
+    # it must be sent as a cache_control-tagged system block (so repeat calls in the
+    # same sweep don't re-bill it in full), never re-embedded in the per-query prompt.
+    simple_id = _seed_query(question="Pergunta simples", status="simple", classification="simple")
+    monkeypatch.setattr(customer_agent, "_fetch_product_facts", lambda: ("O VoltarisOS suporta carregamento inteligente de EV.", ["README.md"]))
+    captured = {}
+
+    def fake_call_model(system, prompt, schema, name, **kwargs):
+        captured["system"] = system
+        captured["prompt"] = prompt
+        captured["model"] = kwargs.get("model")
+        return _tool_response(customer_agent.SUBMIT_RESPONSE_TOOL_NAME, {"subject": "Re:", "body": "ok"})
+
+    monkeypatch.setattr(customer_agent, "_call_model", fake_call_model)
+
+    customer_agent._generate_pending_response_drafts()
+
+    assert captured["model"] == customer_agent.MODEL
+    assert isinstance(captured["system"], list)
+    cached_blocks = [b for b in captured["system"] if b.get("cache_control")]
+    assert len(cached_blocks) == 1
+    assert "O VoltarisOS suporta carregamento inteligente de EV." in cached_blocks[0]["text"]
+    # The per-query question stays in the user prompt -- the facts blob must not be
+    # duplicated there now that it lives in the cached system block.
+    assert "Pergunta simples" in captured["prompt"]
+    assert "VoltarisOS suporta carregamento" not in captured["prompt"]
+    assert len(_drafts_for(simple_id)) == 1
 
 
 def test_generate_draft_does_not_duplicate_existing_drafts(monkeypatch):
@@ -208,7 +258,7 @@ def test_generate_draft_does_not_duplicate_existing_drafts(monkeypatch):
 def test_generate_draft_marks_uncertain_facts_explicitly(monkeypatch):
     query_id = _seed_query(question="Qual o preço exato do plano Pro?", status="simple", classification="simple")
     monkeypatch.setattr(customer_agent, "_fetch_product_facts", lambda: (customer_agent._NO_FACTS_TEXT, []))
-    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(customer_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         customer_agent.SUBMIT_RESPONSE_TOOL_NAME,
         {"subject": "Re: preço", "body": f"Não tenho a certeza sobre o preço exato -- {customer_agent._UNCERTAIN_MARKER}."},
     ))
@@ -224,7 +274,7 @@ def test_generate_draft_one_failure_does_not_abort_the_rest(monkeypatch):
     bad_id = _seed_query(question="pergunta má", status="simple", classification="simple")
     monkeypatch.setattr(customer_agent, "_fetch_product_facts", lambda: ("facts", ["README.md"]))
 
-    def fake_call_model(system, prompt, schema, name):
+    def fake_call_model(system, prompt, schema, name, **kwargs):
         if "pergunta má" in prompt:
             raise RuntimeError("simulated failure")
         return _tool_response(customer_agent.SUBMIT_RESPONSE_TOOL_NAME, {"subject": "Re:", "body": "ok"})

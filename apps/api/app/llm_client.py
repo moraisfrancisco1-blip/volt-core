@@ -19,6 +19,15 @@ _DEFAULT_MODELS = {
     "deepseek": "deepseek-chat",
     "openai": "gpt-4o",
 }
+# Cheaper tier for call sites that are classification/comparison/rule-following rather
+# than quality-sensitive prose generation (e.g. lead scoring, query triage) -- same
+# tool-use contract, much lower cost. deepseek-chat has no separate cheap tier so it
+# reuses the default; gpt-4o-mini is OpenAI's cheap tier.
+_CHEAP_MODELS = {
+    "anthropic": "claude-haiku-4-5-20251001",
+    "deepseek": "deepseek-chat",
+    "openai": "gpt-4o-mini",
+}
 _BASE_URLS = {
     "deepseek": "https://api.deepseek.com",
     "openai": "https://api.openai.com/v1",
@@ -72,8 +81,24 @@ def default_model() -> str:
     return _DEFAULT_MODELS[_detect_provider_or_none() or "anthropic"]
 
 
-def _to_openai_messages(system: str, messages: list[dict]) -> list[dict]:
-    out: list[dict] = [{"role": "system", "content": system}]
+def cheap_model() -> str:
+    # Same never-raises contract as default_model(). Callers use this for
+    # classification/triage/comparison call sites where response quality is not the
+    # bottleneck -- a plain rule-following or scoring task doesn't need the full-price
+    # model just because that's what the rest of the agent uses for its prose drafts.
+    return _CHEAP_MODELS[_detect_provider_or_none() or "anthropic"]
+
+
+def _flatten_system(system: str | list[dict]) -> str:
+    # OpenAI-compatible providers have no concept of cache_control -- collapse a
+    # multi-block Anthropic-style system (used for prompt caching) back into one string.
+    if isinstance(system, str):
+        return system
+    return "\n\n".join(block.get("text", "") for block in system)
+
+
+def _to_openai_messages(system: str | list[dict], messages: list[dict]) -> list[dict]:
+    out: list[dict] = [{"role": "system", "content": _flatten_system(system)}]
     for msg in messages:
         role, content = msg["role"], msg["content"]
         if isinstance(content, str):
@@ -167,19 +192,25 @@ class LLMClient:
     base_url: str | None = None
     _anthropic_client: Any = None
 
-    def call(self, *, model: str, max_tokens: int, system: str, messages: list[dict], tools: list[dict], tool_choice: str | None = None) -> ModelResponse:
+    def call(self, *, model: str, max_tokens: int, system: str | list[dict], messages: list[dict], tools: list[dict], tool_choice: str | None = None) -> ModelResponse:
+        # `system` accepts either a plain string (every existing call site) or a list of
+        # Anthropic content blocks, e.g. [{"type": "text", "text": ..., "cache_control":
+        # {"type": "ephemeral"}}] -- used by call sites that resend the same large static
+        # block (a persona, a README/docs dump) across multiple calls in the same sweep,
+        # so the Anthropic API can serve the repeated prefix from its prompt cache at a
+        # fraction of the input-token cost instead of re-billing it in full every time.
         if self.provider == "anthropic":
             return self._call_anthropic(model, max_tokens, system, messages, tools, tool_choice)
         return self._call_openai_compatible(model, max_tokens, system, messages, tools, tool_choice)
 
-    def _call_anthropic(self, model: str, max_tokens: int, system: str, messages: list[dict], tools: list[dict], tool_choice: str | None) -> ModelResponse:
+    def _call_anthropic(self, model: str, max_tokens: int, system: str | list[dict], messages: list[dict], tools: list[dict], tool_choice: str | None) -> ModelResponse:
         kwargs: dict[str, Any] = dict(model=model, max_tokens=max_tokens, system=system, tools=tools, messages=messages)
         if tool_choice:
             kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
         resp = self._anthropic_client.messages.create(**kwargs)
         return _anthropic_response_to_model_response(resp)
 
-    def _call_openai_compatible(self, model: str, max_tokens: int, system: str, messages: list[dict], tools: list[dict], tool_choice: str | None) -> ModelResponse:
+    def _call_openai_compatible(self, model: str, max_tokens: int, system: str | list[dict], messages: list[dict], tools: list[dict], tool_choice: str | None) -> ModelResponse:
         payload = {
             "model": model,
             "max_tokens": max_tokens,
@@ -206,6 +237,12 @@ def get_client() -> LLMClient:
     if provider is None:
         raise LLMConfigError("No LLM provider configured: set ANTHROPIC_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.")
     if provider == "anthropic":
-        return LLMClient(provider="anthropic", api_key=os.environ["ANTHROPIC_API_KEY"], _anthropic_client=anthropic.Anthropic())
+        # max_retries made explicit (was relying on the SDK's own default, also 2) --
+        # each retried attempt re-sends the full input tokens, so this is a real, if
+        # small, cost multiplier on transient network/5xx errors. Kept at the SDK
+        # default rather than lowered: reliability here matters more than the rare
+        # extra retry, but it's now a visible, tunable constant instead of an implicit
+        # library default.
+        return LLMClient(provider="anthropic", api_key=os.environ["ANTHROPIC_API_KEY"], _anthropic_client=anthropic.Anthropic(max_retries=2))
     key_env = _KEY_ENV_VARS[provider]
     return LLMClient(provider=provider, api_key=os.environ[key_env], base_url=_BASE_URLS[provider])
