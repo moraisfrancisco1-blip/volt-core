@@ -19,6 +19,11 @@ from . import voltaris_client
 # accidental spam loop, same discipline as every other periodic agent in this codebase.
 SWEEP_INTERVAL_SECONDS = max(300, int(os.getenv("VOLT_SALES_INTERVAL_SECONDS", "21600")))
 MODEL = os.getenv("VOLT_SALES_MODEL") or llm_client.default_model()
+# Qualifying a lead against the ICP is a scoring/classification task, not prose the
+# partner will ever read -- the cheap tier follows the tool schema just as reliably.
+# Outreach/welcome drafts and call prep stay on MODEL: their output is either sent to a
+# real person (after human approval) or read by Francisco before a real call.
+MODEL_CLASSIFY = os.getenv("VOLT_SALES_CLASSIFY_MODEL") or llm_client.cheap_model()
 MAX_TOKENS = 1024
 
 # A real backend audit of VoltarisOS (2026-09-07) confirmed it's a B2B fleet/VPP platform
@@ -150,11 +155,11 @@ def _b2b_prospects() -> list[dict]:
     return prospects
 
 
-def _call_model(system: str, prompt: str, tool_schema: dict, tool_name: str) -> Any:
+def _call_model(system: str, prompt: str, tool_schema: dict, tool_name: str, *, model: str = MODEL) -> Any:
     # The single seam tests substitute -- never touches the network once monkeypatched.
     client = llm_client.get_client()
     return client.call(
-        model=MODEL,
+        model=model,
         max_tokens=MAX_TOKENS,
         system=system,
         tools=[tool_schema],
@@ -317,7 +322,7 @@ def _qualify_new_leads() -> None:
                     f"Empresa: {lead.company or 'N/A'}\nOrigem: {lead.source or 'desconhecida'}\n"
                     f"Contexto: {lead.context or '(sem contexto adicional)'}"
                 )
-                response = _call_model(_QUALIFICATION_SYSTEM_PROMPT, prompt, SUBMIT_QUALIFICATION_TOOL_SCHEMA, SUBMIT_QUALIFICATION_TOOL_NAME)
+                response = _call_model(_QUALIFICATION_SYSTEM_PROMPT, prompt, SUBMIT_QUALIFICATION_TOOL_SCHEMA, SUBMIT_QUALIFICATION_TOOL_NAME, model=MODEL_CLASSIFY)
                 submitted = _extract_tool_input(response, SUBMIT_QUALIFICATION_TOOL_NAME)
                 if submitted is None:
                     session.add(AuditRecord(type="sales_lead_qualification_failed", reference_id=str(lead_id), detail=f"model stopped ({response.stop_reason}) without submitting"))
@@ -325,7 +330,7 @@ def _qualify_new_leads() -> None:
                 lead.fit_score = float(submitted.get("fit_score") or 0.0)
                 lead.qualification_summary = str(submitted.get("qualification_summary") or "")
                 lead.suggested_next_step = str(submitted.get("suggested_next_step") or "")
-                lead.model = MODEL
+                lead.model = MODEL_CLASSIFY
                 lead.status = "qualified"
                 lead.qualified_at = datetime.now(timezone.utc)
                 session.add(AuditRecord(type="sales_lead_qualified", reference_id=str(lead_id), detail=f"fit_score={lead.fit_score}"))

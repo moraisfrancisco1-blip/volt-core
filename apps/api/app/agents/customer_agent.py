@@ -18,6 +18,10 @@ from . import github_tools, repo_config
 # keeps a misconfigured tiny value from turning this into an accidental spam loop.
 SWEEP_INTERVAL_SECONDS = max(300, int(os.getenv("VOLT_CUSTOMER_INTERVAL_SECONDS", "21600")))
 MODEL = os.getenv("VOLT_CUSTOMER_MODEL") or llm_client.default_model()
+# Triage is a binary classification (simple vs. sensitive), not prose generation -- the
+# cheap tier is just as reliable at following the tool schema here, and it's the call
+# site that runs most often (once per new query, before any draft is ever written).
+MODEL_TRIAGE = os.getenv("VOLT_CUSTOMER_TRIAGE_MODEL") or llm_client.cheap_model()
 MAX_TOKENS = 1024
 
 _VOLTARISOS_SYSTEM_ID = "voltaris-os"
@@ -146,11 +150,11 @@ def _fetch_product_facts() -> tuple[str, list[str]]:
     return "\n\n".join(parts), sources
 
 
-def _call_model(system: str, prompt: str, tool_schema: dict, tool_name: str) -> Any:
+def _call_model(system: str | list[dict], prompt: str, tool_schema: dict, tool_name: str, *, model: str) -> Any:
     # The single seam tests substitute -- never touches the network once monkeypatched.
     client = llm_client.get_client()
     return client.call(
-        model=MODEL,
+        model=model,
         max_tokens=MAX_TOKENS,
         system=system,
         tools=[tool_schema],
@@ -187,7 +191,7 @@ def _triage_new_queries() -> None:
                     continue
 
                 prompt = f"Pedido do cliente/parceiro:\n{query.question}"
-                response = _call_model(_TRIAGE_SYSTEM_PROMPT, prompt, SUBMIT_TRIAGE_TOOL_SCHEMA, SUBMIT_TRIAGE_TOOL_NAME)
+                response = _call_model(_TRIAGE_SYSTEM_PROMPT, prompt, SUBMIT_TRIAGE_TOOL_SCHEMA, SUBMIT_TRIAGE_TOOL_NAME, model=MODEL_TRIAGE)
                 submitted = _extract_tool_input(response, SUBMIT_TRIAGE_TOOL_NAME)
 
                 if submitted is None:
@@ -229,6 +233,21 @@ def _generate_pending_response_drafts() -> None:
         return
 
     facts_text, sources = _fetch_product_facts()
+    # facts_text (README + docs, up to tens of thousands of tokens) is identical for
+    # every pending query in this loop -- previously it was re-embedded in the user
+    # prompt and re-billed in full on every single call. Moving it into a cached system
+    # block means only the FIRST call in a sweep pays full price for it; every
+    # subsequent call within the cache's ~5min window reads it back at a fraction of
+    # the cost. The per-query part (the actual question) stays in the user message,
+    # which is what varies and must never be cached.
+    draft_system: str | list[dict] = [
+        {"type": "text", "text": _DRAFT_SYSTEM_PROMPT},
+        {
+            "type": "text",
+            "text": f"Factos reais sobre o VoltarisOS (README/documentação):\n{facts_text}",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
 
     for query_id in pending_ids:
         try:
@@ -236,11 +255,8 @@ def _generate_pending_response_drafts() -> None:
                 query = session.get(CustomerQueryRecord, query_id)
                 if query is None or query.status != "simple":
                     continue
-                prompt = (
-                    f"Factos reais sobre o VoltarisOS (README/documentação):\n{facts_text}\n\n"
-                    f"Pedido do cliente/parceiro:\n{query.question}"
-                )
-                response = _call_model(_DRAFT_SYSTEM_PROMPT, prompt, SUBMIT_RESPONSE_TOOL_SCHEMA, SUBMIT_RESPONSE_TOOL_NAME)
+                prompt = f"Pedido do cliente/parceiro:\n{query.question}"
+                response = _call_model(draft_system, prompt, SUBMIT_RESPONSE_TOOL_SCHEMA, SUBMIT_RESPONSE_TOOL_NAME, model=MODEL)
                 submitted = _extract_tool_input(response, SUBMIT_RESPONSE_TOOL_NAME)
                 if submitted is None:
                     session.add(AuditRecord(type="customer_response_draft_failed", reference_id=str(query_id), detail=f"model stopped ({response.stop_reason}) without submitting"))

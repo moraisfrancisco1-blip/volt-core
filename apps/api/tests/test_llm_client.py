@@ -73,6 +73,19 @@ def test_default_model_reflects_active_provider(monkeypatch):
     assert llm_client.default_model() == "deepseek-chat"
 
 
+# --- cheap_model -- the classification/triage tier, same never-raises contract ------
+
+def test_cheap_model_without_any_key_falls_back_to_anthropic_haiku(monkeypatch):
+    _clear_all_providers(monkeypatch)
+    assert llm_client.cheap_model() == "claude-haiku-4-5-20251001"
+
+
+def test_cheap_model_reflects_active_provider(monkeypatch):
+    _clear_all_providers(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    assert llm_client.cheap_model() == "gpt-4o-mini"
+
+
 # --- get_client -------------------------------------------------------------------
 
 def test_get_client_without_any_key_raises_config_error(monkeypatch):
@@ -190,6 +203,44 @@ def test_call_openai_compatible_posts_to_the_right_url_and_forces_tool_choice(mo
     assert captured["json"]["tool_choice"] == {"type": "function", "function": {"name": "classify"}}
     assert captured["headers"]["Authorization"] == "Bearer fake-key"
     assert result.content[0]["name"] == "classify"
+
+
+# --- LLMClient.call -- Anthropic path, prompt-caching system blocks -------------
+
+def test_call_anthropic_passes_system_block_list_through_unchanged():
+    captured = {}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return type("R", (), {"content": [], "stop_reason": "end_turn", "usage": None})()
+
+    class FakeAnthropicClient:
+        messages = FakeMessages()
+
+    system_blocks = [
+        {"type": "text", "text": "persona"},
+        {"type": "text", "text": "big static facts blob", "cache_control": {"type": "ephemeral"}},
+    ]
+    client = llm_client.LLMClient(provider="anthropic", api_key="fake", _anthropic_client=FakeAnthropicClient())
+    client.call(model="claude-haiku-4-5-20251001", max_tokens=100, system=system_blocks, messages=[{"role": "user", "content": "oi"}], tools=[])
+
+    # The cache_control block must reach the real API call byte-for-byte -- this is the
+    # whole mechanism prompt caching relies on, so nothing here may rewrap, stringify,
+    # or drop the cache_control key.
+    assert captured["system"] == system_blocks
+
+
+def test_to_openai_messages_flattens_cache_control_system_blocks_to_plain_text():
+    # OpenAI-compatible providers don't understand cache_control -- a system block list
+    # (built for Anthropic's prompt cache) must still degrade to a normal system string
+    # rather than erroring or silently dropping content when DeepSeek/OpenAI is active.
+    system_blocks = [
+        {"type": "text", "text": "persona"},
+        {"type": "text", "text": "facts", "cache_control": {"type": "ephemeral"}},
+    ]
+    messages = llm_client._to_openai_messages(system_blocks, [{"role": "user", "content": "oi"}])
+    assert messages[0] == {"role": "system", "content": "persona\n\nfacts"}
 
 
 def test_call_openai_compatible_http_error_raises_llm_call_error(monkeypatch):

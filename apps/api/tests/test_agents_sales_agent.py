@@ -103,7 +103,7 @@ def test_sync_b2b_prospects_is_idempotent(monkeypatch):
 
 def test_qualify_new_leads_persists_fields_and_marks_qualified(monkeypatch):
     lead_id = _seed_lead(lead_type="b2b_partner", consent_basis="b2b_legitimate_interest", email="qualify-test@example.com")
-    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         sales_agent.SUBMIT_QUALIFICATION_TOOL_NAME,
         {"fit_score": 0.8, "qualification_summary": "Dono de casa com solar, a considerar bateria.", "suggested_next_step": "Agendar demo."},
     ))
@@ -116,6 +116,27 @@ def test_qualify_new_leads_persists_fields_and_marks_qualified(monkeypatch):
     assert lead.qualification_summary == "Dono de casa com solar, a considerar bateria."
     assert lead.suggested_next_step == "Agendar demo."
     assert lead.qualified_at is not None
+    assert lead.model == sales_agent.MODEL_CLASSIFY
+
+
+def test_qualify_new_leads_uses_the_cheap_classification_model(monkeypatch):
+    # Scoring a lead against the ICP is classification, not prose a partner will ever
+    # read -- it must run on the cheap tier, kept distinct from the (more expensive)
+    # model used for outreach/welcome drafts and call prep.
+    lead_id = _seed_lead(lead_type="b2b_partner", consent_basis="b2b_legitimate_interest", email="cheap-model-test@example.com")
+    captured = {}
+
+    def fake_call_model(system, prompt, schema, name, **kwargs):
+        captured["model"] = kwargs.get("model")
+        return _tool_response(sales_agent.SUBMIT_QUALIFICATION_TOOL_NAME, {"fit_score": 0.5, "qualification_summary": "s", "suggested_next_step": "n"})
+
+    monkeypatch.setattr(sales_agent, "_call_model", fake_call_model)
+
+    sales_agent._qualify_new_leads()
+
+    assert captured["model"] == sales_agent.MODEL_CLASSIFY
+    assert sales_agent.MODEL_CLASSIFY != sales_agent.MODEL
+    assert _get_lead(lead_id).status == "qualified"
 
 
 def test_qualify_new_leads_one_failure_does_not_abort_the_rest(monkeypatch):
@@ -123,7 +144,7 @@ def test_qualify_new_leads_one_failure_does_not_abort_the_rest(monkeypatch):
     bad_id = _seed_lead(lead_type="b2b_partner", consent_basis="b2b_legitimate_interest", email="bad-lead@example.com")
     calls = []
 
-    def fake_call_model(system, prompt, schema, name):
+    def fake_call_model(system, prompt, schema, name, **kwargs):
         calls.append(prompt)
         if "bad-lead" in prompt:
             raise RuntimeError("simulated model failure")
@@ -139,7 +160,7 @@ def test_qualify_new_leads_one_failure_does_not_abort_the_rest(monkeypatch):
 
 def test_qualify_new_leads_no_tool_use_leaves_lead_new(monkeypatch):
     lead_id = _seed_lead(lead_type="b2b_partner", consent_basis="b2b_legitimate_interest", email="no-tool-use@example.com")
-    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: SimpleNamespace(
+    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: SimpleNamespace(
         content=[{"type": "text", "text": "uncertain"}], stop_reason="end_turn", input_tokens=10, output_tokens=5,
     ))
 
@@ -168,7 +189,7 @@ def test_qualify_new_leads_never_touches_tenant_signup_leads(monkeypatch):
 def test_generate_outreach_draft_only_for_qualified_b2b_without_existing_draft(monkeypatch):
     b2b_id = _seed_lead(lead_type="b2b_partner", status="qualified", email="b2b-draft-test@example.com", consent_basis="b2b_legitimate_interest", company="Zon BV")
     tenant_id = _seed_lead(lead_type="tenant_signup", status="qualified", email="tenant-no-b2b-draft@example.com")
-    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         sales_agent.SUBMIT_OUTREACH_TOOL_NAME,
         {"subject": "Parceria com o VoltarisOS", "body": "Corpo do email.\n\nSe preferires não receber mais contacto, basta responder a dizer que sim."},
     ))
@@ -274,7 +295,7 @@ def test_sync_tenants_missing_email_stores_empty_string_not_none(monkeypatch):
 
 def test_generate_tenant_welcome_draft_for_new_tenant_with_email(monkeypatch):
     tenant_id = _seed_lead(lead_type="tenant_signup", status="new", email="welcome-test@example.com", consent_basis="existing_customer_tenant")
-    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         sales_agent.SUBMIT_WELCOME_TOOL_NAME,
         {"subject": "Bem-vindo ao VoltarisOS", "body": "Olá! A equipa está disponível para ajudar na configuração inicial."},
     ))
@@ -333,7 +354,7 @@ def test_run_sales_sweep_never_raises_on_total_failure(monkeypatch):
 
 def test_run_call_prep_persists_summary_and_sets_scheduled_call_at(monkeypatch):
     lead_id = _seed_lead(status="qualified", qualification_summary="Bom fit.", suggested_next_step="Ligar.", email="call-prep@example.com")
-    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name: _tool_response(
+    monkeypatch.setattr(sales_agent, "_call_model", lambda system, prompt, schema, name, **kwargs: _tool_response(
         sales_agent.SUBMIT_CALL_PREP_TOOL_NAME, {"call_prep_summary": "Jan de Boer, já qualificado, cobrir preço e prazo de instalação."},
     ))
 
@@ -347,7 +368,7 @@ def test_run_call_prep_persists_summary_and_sets_scheduled_call_at(monkeypatch):
 def test_run_call_prep_model_exception_is_swallowed_not_raised(monkeypatch):
     lead_id = _seed_lead(email="call-prep-exception@example.com")
 
-    def _boom(system, prompt, schema, name):
+    def _boom(system, prompt, schema, name, **kwargs):
         raise RuntimeError("simulated failure")
 
     monkeypatch.setattr(sales_agent, "_call_model", _boom)
