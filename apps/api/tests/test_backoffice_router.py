@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from app.db import session_scope
@@ -163,6 +165,8 @@ def test_payment_control_summary_counts_paid_vs_pending():
 
 
 def test_payment_control_summary_flags_security_incident_and_it_takes_priority():
+    # Pre-existing/legacy plain-text detail (written before the incident detail became
+    # JSON) must still degrade to the generic wording, not crash the endpoint.
     with session_scope() as session:
         session.query(DaiOakesPaymentRecord).delete()
         session.add(AuditRecord(type="backoffice_dai_oakes_security_incident_failed", detail="unexpected field(s): clientName"))
@@ -172,6 +176,26 @@ def test_payment_control_summary_flags_security_incident_and_it_takes_priority()
         payload = response.json()
         assert payload["security_incident"] is True
         assert "revisão humana" in payload["note"]
+
+
+def test_payment_control_summary_security_incident_names_field_and_count():
+    # The field NAME (never the value) and how many records were affected must be
+    # visible on the dashboard, so a human doesn't need the authenticated audit-log
+    # endpoint just to see what triggered the incident.
+    with session_scope() as session:
+        session.query(DaiOakesPaymentRecord).delete()
+        session.add(AuditRecord(
+            type="backoffice_dai_oakes_security_incident_failed",
+            detail=json.dumps({"unexpected_fields": ["clientName", "patientId"], "entries_affected": 3}),
+        ))
+
+    with TestClient(app) as client:
+        response = client.get("/api/backoffice/payment-control-summary")
+        payload = response.json()
+        assert payload["security_incident"] is True
+        assert "clientName" in payload["note"]
+        assert "patientId" in payload["note"]
+        assert "3" in payload["note"]
 
 
 def test_payment_control_summary_distinguishes_connector_failure_from_no_data():

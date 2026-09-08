@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -79,10 +80,13 @@ def _sync_dai_oakes_payments() -> None:
             # SECURITY INCIDENT -- named to start with "backoffice_" and end in "_failed"
             # so status_router's existing audit-based dashboard status picks this up as an
             # error automatically, without needing a bespoke check. Nothing from this
-            # batch is stored; field NAMES only, never values, appear in the detail.
+            # batch is stored; field NAMES only, never values, appear in the detail --
+            # stored as JSON so the dashboard can show the field names and the affected
+            # count without re-parsing free text (and so a value can never slip in as an
+            # unstructured string).
             session.add(AuditRecord(
                 type="backoffice_dai_oakes_security_incident_failed",
-                detail=f"unexpected field(s) in Dai Oakes payment-control response, entire batch rejected: {', '.join(unexpected_fields)}",
+                detail=json.dumps({"unexpected_fields": unexpected_fields, "entries_affected": len(raw_entries)}),
             ))
             return
 

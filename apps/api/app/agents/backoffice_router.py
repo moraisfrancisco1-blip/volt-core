@@ -1,3 +1,4 @@
+import json
 import threading
 
 from fastapi import APIRouter, HTTPException, Query
@@ -118,7 +119,23 @@ def get_payment_control_summary() -> dict:
 
         if security_incident:
             source = "dai_oakes_real"
+            # Field NAMES only, never values -- backoffice_agent already enforces that
+            # guarantee when it writes the audit detail; this just surfaces it on the
+            # dashboard instead of requiring the authenticated /api/v1/audit endpoint to
+            # see what triggered the incident. Falls back to the older generic wording
+            # for any pre-existing incident row written before detail became JSON.
             note = "Incidente de segurança: resposta da Dai Oakes continha um campo inesperado -- revisão humana necessária antes de continuar a sincronizar."
+            try:
+                incident_detail = json.loads(latest_audit.detail or "")
+                fields = incident_detail["unexpected_fields"]
+                entries_affected = incident_detail["entries_affected"]
+                note = (
+                    f"Incidente de segurança: {entries_affected} registo(s) da resposta da Dai Oakes "
+                    f"continham campo(s) inesperado(s) ({', '.join(fields)}) -- revisão humana necessária "
+                    "antes de continuar a sincronizar."
+                )
+            except (TypeError, ValueError, KeyError):
+                pass
         elif not rows and latest_audit is not None and latest_audit.type == "dai_oakes_payment_sync_skipped":
             source = "no_source_configured"
             note = "sem dados financeiros ainda (VOLT_CORE_SERVICE_KEY_DAIOAKES não configurada)"
