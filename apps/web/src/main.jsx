@@ -347,7 +347,7 @@ function App() {
         />
       );
     }
-    if (view === 'topology') return <TopologyView agents={agentsForGrid} />;
+    if (view === 'topology') return <TopologyView agents={agentsForGrid} integrations={integrationsStatus} />;
     if (view === 'funnel') return <FunnelView leads={salesLeads} drafts={salesDrafts} deals={deals} />;
     if (view === 'escalations') return <EscalationsView escalations={escalations} onSelect={openEscalationDetail} />;
     if (view === 'events') return <EventsView events={events} onSelect={openEventDetail} />;
