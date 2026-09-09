@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import VoltMark from '../VoltMark.jsx';
+import AgentSheet from '../AgentSheet.jsx';
+import ClusterDrilldown from '../ClusterDrilldown.jsx';
 
 /* ---------------------------------------------------------------------------
  * Mapa de topologia -- o Volt Core ao centro e, de cada lado, uma empresa com o
@@ -35,6 +37,11 @@ const CHAIN = [
   { from: 'volt', to: 'database' },
 ];
 const CHAIN_COLOR = '#9a8a72';
+
+// O núcleo (VOLT CORE) não é uma empresa -- é a cadeia reativa de investigação
+// que serve as duas. Clicar nele abre o mesmo drill-down por cluster, com os
+// quatro agentes que a compõem (ver runner.py / finance_runner.py / etc.).
+const NUCLEO_CLUSTER = { id: 'nucleo', label: 'NÚCLEO', color: '#f0b429', agentIds: ['volt', 'dev_debug', 'database', 'finance'] };
 
 // Mesma paleta de estados do resto do dashboard (AgentGrid / CoreHero).
 const STATE_COLOR = { working: '#f0b429', error: '#d9614f', idle: '#7d7062' };
@@ -97,10 +104,13 @@ function normalise(agent) {
   return STATE_COLOR[agent.state] ? agent.state : 'idle';
 }
 
-function TopologyView({ agents }) {
+function TopologyView({ agents, integrations }) {
   const [selected, setSelected] = useState(null); // { agentId, companyId }
+  const [sheetFor, setSheetFor] = useState(null); // o mesmo, mas para a ficha completa
+  const [drilldown, setDrilldown] = useState(null); // { id, label, color, agentIds, connectedIds? }
 
   const roster = agents || [];
+  const agentLabels = useMemo(() => Object.fromEntries(roster.map(a => [a.id, a.label])), [roster]);
 
   const clusters = useMemo(() => {
     if (!roster.length) return [];
@@ -222,17 +232,26 @@ function TopologyView({ agents }) {
                 );
               })}
 
-              {/* hub da empresa */}
-              <circle cx={cluster.hubX} cy={CY} r={HUB_R} fill="#120e0a" stroke={cluster.color} strokeWidth="1.6" />
-              <text x={cluster.hubX} y={CY + 3} textAnchor="middle" className="mono" fill={cluster.color} style={{ fontSize: 11, fontWeight: 700 }}>
-                {cluster.connectedCount}/{roster.length}
-              </text>
-              <text x={cluster.hubX} y={CY - HUB_R - 14} textAnchor="middle" className="display" fill={cluster.color} style={{ fontSize: 14, letterSpacing: 1.4 }}>
-                {cluster.label}
-              </text>
-              <text x={cluster.hubX} y={CY + HUB_R + 20} textAnchor="middle" className="mono" fill="#8a7c68" style={{ fontSize: 8.5, letterSpacing: 0.6 }}>
-                LIGADOS
-              </text>
+              {/* hub da empresa -- clicável, abre o drill-down por cluster */}
+              <g
+                onClick={() => setDrilldown({ id: cluster.id, companyId: cluster.id, label: cluster.label, color: cluster.color, agentIds: roster.map(a => a.id), connectedIds: cluster.connected })}
+                style={{ cursor: 'pointer' }}
+              >
+                <circle cx={cluster.hubX} cy={CY} r={HUB_R + 10} fill="transparent" />
+                <circle cx={cluster.hubX} cy={CY} r={HUB_R} fill="#120e0a" stroke={cluster.color} strokeWidth="1.6" />
+                <text x={cluster.hubX} y={CY + 3} textAnchor="middle" className="mono" fill={cluster.color} style={{ fontSize: 11, fontWeight: 700 }}>
+                  {cluster.connectedCount}/{roster.length}
+                </text>
+                <text x={cluster.hubX} y={CY - HUB_R - 14} textAnchor="middle" className="display" fill={cluster.color} style={{ fontSize: 14, letterSpacing: 1.4 }}>
+                  {cluster.label}
+                </text>
+                <text x={cluster.hubX} y={CY + HUB_R + 20} textAnchor="middle" className="mono" fill="#8a7c68" style={{ fontSize: 8.5, letterSpacing: 0.6 }}>
+                  LIGADOS
+                </text>
+                <text x={cluster.hubX} y={CY + HUB_R + 32} textAnchor="middle" className="mono" fill={cluster.color} fillOpacity="0.7" style={{ fontSize: 7.5, letterSpacing: 0.4 }}>
+                  CLICA · ÁRVORE DO CLUSTER
+                </text>
+              </g>
 
               {/* agentes */}
               {cluster.nodes.map(node => {
@@ -288,8 +307,9 @@ function TopologyView({ agents }) {
             </g>
           ))}
 
-          {/* núcleo */}
-          <g>
+          {/* núcleo -- clicável, abre o drill-down da cadeia reativa (volt/dev_debug/database/finance) */}
+          <g onClick={() => setDrilldown(NUCLEO_CLUSTER)} style={{ cursor: 'pointer' }}>
+            <circle cx={CORE_X} cy={CY} r={CORE_R + 14} fill="transparent" />
             <circle cx={CORE_X} cy={CY} r={CORE_R} fill="rgba(240,180,60,0.08)" stroke="#f0b429" strokeWidth="1.4" />
             <circle cx={CORE_X} cy={CY} r={CORE_R + 12} fill="none" stroke="#f0b429" strokeOpacity="0.32" strokeWidth="1" strokeDasharray="4 7">
               <animateTransform attributeName="transform" type="rotate" from={`0 ${CORE_X} ${CY}`} to={`360 ${CORE_X} ${CY}`} dur="48s" repeatCount="indefinite" />
@@ -299,6 +319,9 @@ function TopologyView({ agents }) {
             </g>
             <text x={CORE_X} y={CY + CORE_R + 28} textAnchor="middle" className="display" fill="#f0b429" style={{ fontSize: 15, letterSpacing: 1.5 }}>
               VOLT CORE
+            </text>
+            <text x={CORE_X} y={CY + CORE_R + 40} textAnchor="middle" className="mono" fill="#f0b429" fillOpacity="0.7" style={{ fontSize: 7.5, letterSpacing: 0.4 }}>
+              CLICA · ÁRVORE DO NÚCLEO
             </text>
           </g>
         </svg>
@@ -396,9 +419,65 @@ function TopologyView({ agents }) {
                 Ainda não ligado a esta empresa. Falta o endpoint do lado da {detail.company.label} para este agente.
               </div>
             )}
+
+            <div className="row" style={{ gap: 7, marginTop: 12 }}>
+              <button
+                type="button"
+                className="mono"
+                onClick={() => setSheetFor(selected)}
+                style={{
+                  flex: 1, padding: '7px 0', borderRadius: 6,
+                  border: '1px solid rgba(240,180,60,0.25)', background: 'none',
+                  color: '#f0b429', fontSize: 9.5, letterSpacing: 0.06 + 'em', cursor: 'pointer',
+                }}
+              >
+                FICHA COMPLETA
+              </button>
+              <button
+                type="button"
+                className="mono"
+                onClick={() => setDrilldown({
+                  id: `agent-${detail.agent.id}`,
+                  companyId: selected.companyId,
+                  label: detail.agent.label,
+                  color: detail.company.color,
+                  agentIds: [detail.agent.id],
+                  connectedIds: detail.connected ? [detail.agent.id] : [],
+                })}
+                style={{
+                  flex: 1, padding: '7px 0', borderRadius: 6,
+                  border: `1px solid ${detail.company.color}44`, background: 'none',
+                  color: detail.company.color, fontSize: 9.5, letterSpacing: 0.06 + 'em', cursor: 'pointer',
+                }}
+              >
+                ÁRVORE
+              </button>
+            </div>
           </div>
         )}
       </div>
+
+      <AgentSheet
+        agent={sheetFor ? roster.find(a => a.id === sheetFor.agentId) : null}
+        company={sheetFor ? COMPANIES.find(c => c.id === sheetFor.companyId) : null}
+        integrations={integrations}
+        agentLabels={agentLabels}
+        onClose={() => setSheetFor(null)}
+      />
+
+      <ClusterDrilldown
+        cluster={drilldown}
+        agents={roster}
+        agentLabels={agentLabels}
+        onClose={() => setDrilldown(null)}
+        onOpenSheet={agentId => {
+          // companyId fica null para o núcleo -- volt/dev_debug/database/finance não
+          // pertencem a nenhuma empresa, a ficha simplesmente não mostra o distintivo.
+          const companyId = drilldown ? drilldown.companyId || null : null;
+          setDrilldown(null);
+          setSheetFor({ agentId, companyId });
+        }}
+      />
     </div>
   );
 }
