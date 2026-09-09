@@ -2,53 +2,58 @@ import React, { useMemo, useState } from 'react';
 import VoltMark from '../VoltMark.jsx';
 
 /* ---------------------------------------------------------------------------
- * Mapa de topologia -- os mesmos agentes do Centro de Comando, mas agrupados
- * por empresa em sectores separados em vez de num anel único.
+ * Mapa de topologia -- o Volt Core ao centro e, de cada lado, uma empresa com o
+ * roster COMPLETO de agentes à sua volta.
  *
- * COMPANIES é o ÚNICO sítio a editar quando um agente muda de empresa ou uma
- * empresa nova aparece: sectores, cores, ligações e legenda são todos derivados
- * daqui. Um agente que o backend não devolva é simplesmente ignorado, e uma
- * empresa sem agentes presentes não desenha sector nenhum -- por isso isto não
- * parte quando o AGENT_ORDER do main.jsx muda.
+ * O modelo é partilhado, não particionado: os mesmos agentes servem as duas
+ * empresas. O que muda por empresa é quais já estão de facto ligados.
+ *
+ * `connected` = agentes que hoje falam mesmo com o serviço dessa empresa,
+ * verificado nos imports de apps/api/app/agents/*.py:
+ *   VoltarisOS -> production_monitor (voltaris_tools), market_intelligence,
+ *                 sales, deals (voltaris_client)
+ *   Dai Oakes  -> backoffice (daioakes_client)
+ * Os restantes desenham-se esbatidos como POR LIGAR -- a arquitetura alvo fica
+ * visível sem inventar estado que a API não devolve.
+ *
+ * Porque é que isto está aqui e não vem da API: /api/agents/status devolve UM
+ * estado por agente, global, sem dimensão de empresa. Quando o backend passar a
+ * dar estado por sistema (o dashboard já recebe `systems`, e repo_config /
+ * railway_config já são indexados por system), esta constante desaparece e o
+ * mapa passa a ser inteiramente data-driven.
  * ------------------------------------------------------------------------ */
 const COMPANIES = [
-  { id: 'voltaris', label: 'VOLTARISOS', color: '#4f8fe0', agents: ['production_monitor', 'sales', 'deals'] },
-  { id: 'daioakes', label: 'DAI OAKES', color: '#e0793c', agents: ['backoffice'] },
-  { id: 'nucleo', label: 'NÚCLEO', color: '#8fc48a', agents: ['market_intelligence', 'marketing', 'operations', 'customer'] },
-  { id: 'investigacoes', label: 'INVESTIGAÇÕES', color: '#c98fd8', agents: ['volt', 'dev_debug', 'database', 'finance'] },
+  { id: 'voltaris', label: 'VOLTARISOS', color: '#4f8fe0', connected: ['production_monitor', 'market_intelligence', 'sales', 'deals'] },
+  { id: 'daioakes', label: 'DAI OAKES', color: '#e0793c', connected: ['backoffice'] },
 ];
 
 // Mesma paleta de estados do resto do dashboard (AgentGrid / CoreHero).
 const STATE_COLOR = { working: '#f0b429', error: '#d9614f', idle: '#7d7062' };
 const STATE_LABEL = { working: 'A TRABALHAR', error: 'ERRO', idle: 'EM ESPERA' };
+const OFF_STROKE = '#6f6250';
+const OFF_TEXT = '#8a7c68';
 
-const VIEW_W = 1000;
-const VIEW_H = 640;
-const CX = VIEW_W / 2;
-const CY = VIEW_H / 2;
-const R_INNER = 152;
-const R_OUTER = 272;
-const R_NODE = 212;
-const SECTOR_GAP = 0.1; // radianos de folga entre empresas
+const VIEW_W = 1240;
+const VIEW_H = 560;
+const CY = 268;
+const CORE_X = VIEW_W / 2;
+const CORE_R = 42;
+const HUB_R = 27;
+const RING_R = 152;
+const NODE_R = 9;
+const CLUSTER_DX = 330; // distância do núcleo a cada hub de empresa
+// Os agentes ocupam 300° e não 360°: a abertura fica virada ao núcleo, para a
+// ligação empresa->Volt Core passar por espaço vazio em vez de cortar nós.
+const ARC_SPAN = (300 * Math.PI) / 180;
 
-function polar(r, a) {
-  return [CX + r * Math.cos(a), CY + r * Math.sin(a)];
-}
-
-// Sector em anel (fatia de donut) -- a "área" de cada empresa.
-function annularSector(rInner, rOuter, a0, a1) {
-  const large = a1 - a0 > Math.PI ? 1 : 0;
-  const [x0, y0] = polar(rOuter, a0);
-  const [x1, y1] = polar(rOuter, a1);
-  const [x2, y2] = polar(rInner, a1);
-  const [x3, y3] = polar(rInner, a0);
-  return `M${x0},${y0} A${rOuter},${rOuter} 0 ${large} 1 ${x1},${y1} L${x2},${y2} A${rInner},${rInner} 0 ${large} 0 ${x3},${y3} Z`;
+function polar(cx, cy, r, a) {
+  return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
 }
 
 // Etiquetas longas ("INTELIGÊNCIA DE MERCADO") partidas em duas linhas o mais
 // equilibradas possível, para não colidirem com o nó vizinho.
 function wrapLabel(label) {
-  if (label.length <= 13) return [label];
+  if (label.length <= 12) return [label];
   const words = label.split(' ');
   if (words.length === 1) return [label];
   let cut = 1;
@@ -63,63 +68,62 @@ function wrapLabel(label) {
   return [words.slice(0, cut).join(' '), words.slice(cut).join(' ')];
 }
 
-function anchorFor(angle) {
-  const c = Math.cos(angle);
-  if (Math.abs(c) < 0.3) return 'middle';
-  return c > 0 ? 'start' : 'end';
+function normalise(agent) {
+  return STATE_COLOR[agent.state] ? agent.state : 'idle';
 }
 
 function TopologyView({ agents }) {
-  const [selectedId, setSelectedId] = useState(null);
+  const [selected, setSelected] = useState(null); // { agentId, companyId }
 
-  const groups = useMemo(() => {
-    const byId = Object.fromEntries((agents || []).map(a => [a.id, a]));
-    const present = COMPANIES
-      .map(company => ({ ...company, members: company.agents.map(id => byId[id]).filter(Boolean) }))
-      .filter(company => company.members.length > 0);
+  const roster = agents || [];
 
-    // O sector cresce com o número de agentes, mas com um mínimo fixo por
-    // empresa -- senão uma empresa de um só agente (Dai Oakes) ficava com uma
-    // fatia ilegível ao lado de uma de quatro.
-    const weight = company => company.members.length + 1.2;
-    const total = present.reduce((n, company) => n + weight(company), 0) || 1;
-    let cursor = -Math.PI / 2;
+  const clusters = useMemo(() => {
+    if (!roster.length) return [];
 
-    return present.map(company => {
-      const span = (Math.PI * 2 * weight(company)) / total;
-      const a0 = cursor + SECTOR_GAP / 2;
-      const a1 = cursor + span - SECTOR_GAP / 2;
-      cursor += span;
-      const mid = (a0 + a1) / 2;
+    return COMPANIES.map((company, ci) => {
+      const hubX = CORE_X + (ci === 0 ? -CLUSTER_DX : CLUSTER_DX);
+      const away = ci === 0 ? Math.PI : 0; // arco virado para fora, longe do núcleo
+      const nodes = roster.map((agent, i) => {
+        const angle = away - ARC_SPAN / 2 + (ARC_SPAN * (i + 0.5)) / roster.length;
+        const [x, y] = polar(hubX, CY, RING_R, angle);
 
-      const nodes = company.members.map((agent, i) => {
-        const angle = a0 + (a1 - a0) * ((i + 0.5) / company.members.length);
-        const [x, y] = polar(R_NODE, angle);
-        return { agent, angle, x, y };
+        // Nos nós laterais uma etiqueta centrada por cima do raio cai em cima do
+        // próprio nó (é larga e está a 26px dele), por isso encosta-se ao lado.
+        const cos = Math.cos(angle);
+        let lx;
+        let ly;
+        let anchor;
+        if (Math.abs(cos) > 0.5) {
+          anchor = cos > 0 ? 'start' : 'end';
+          lx = x + (cos > 0 ? NODE_R + 7 : -(NODE_R + 7));
+          ly = y - 3;
+        } else {
+          anchor = 'middle';
+          [lx, ly] = polar(hubX, CY, RING_R + 26, angle);
+        }
+        return { agent, angle, x, y, lx, ly, anchor, connected: company.connected.includes(agent.id) };
       });
-
-      const [labelX, labelY] = polar(R_OUTER + 24, mid);
-      return { ...company, mid, nodes, labelX, labelY, path: annularSector(R_INNER, R_OUTER, a0, a1) };
+      const connectedCount = nodes.filter(n => n.connected).length;
+      return { ...company, hubX, nodes, connectedCount };
     });
-  }, [agents]);
+  }, [roster]);
 
-  const counts = (agents || []).reduce((acc, agent) => {
-    const state = STATE_COLOR[agent.state] ? agent.state : 'idle';
-    acc[state] = (acc[state] || 0) + 1;
-    return acc;
-  }, {});
-
-  const selected = (agents || []).find(agent => agent.id === selectedId) || null;
-  const selectedCompany = COMPANIES.find(company => company.agents.includes(selectedId));
+  const detail = useMemo(() => {
+    if (!selected) return null;
+    const agent = roster.find(a => a.id === selected.agentId);
+    const company = COMPANIES.find(c => c.id === selected.companyId);
+    if (!agent || !company) return null;
+    return { agent, company, connected: company.connected.includes(agent.id) };
+  }, [selected, roster]);
 
   return (
-    <div style={{ display: 'flex', gap: 14, alignItems: 'stretch', minHeight: 0 }}>
+    <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', minHeight: 0 }}>
       {/* ---------------------------------------------------------------- mapa */}
-      <div className="panel" style={{ flex: 1, padding: 16, position: 'relative', minWidth: 0 }}>
+      <div className="panel" style={{ flex: 1, padding: 16, minWidth: 0 }}>
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
           <div className="panel-title">MAPA DE TOPOLOGIA</div>
           <div className="mono" style={{ fontSize: 10, color: '#a89680' }}>
-            {(agents || []).length} AGENTES · {groups.length} EMPRESAS
+            {roster.length} AGENTES POR EMPRESA · {COMPANIES.length} EMPRESAS
           </div>
         </div>
 
@@ -133,174 +137,179 @@ function TopologyView({ agents }) {
               </feMerge>
             </filter>
             <radialGradient id="topo-core-glow">
-              <stop offset="0%" stopColor="#f0b429" stopOpacity="0.20" />
+              <stop offset="0%" stopColor="#f0b429" stopOpacity="0.22" />
               <stop offset="100%" stopColor="#f0b429" stopOpacity="0" />
             </radialGradient>
           </defs>
 
-          <circle cx={CX} cy={CY} r={R_OUTER} fill="url(#topo-core-glow)" />
+          <circle cx={CORE_X} cy={CY} r={150} fill="url(#topo-core-glow)" />
 
-          {/* Território de cada empresa */}
-          {groups.map(group => (
-            <path
-              key={`sector-${group.id}`}
-              d={group.path}
-              fill={group.color}
-              fillOpacity="0.05"
-              stroke={group.color}
-              strokeOpacity="0.28"
-              strokeWidth="1"
-            />
-          ))}
+          {clusters.map(cluster => (
+            <g key={cluster.id}>
+              {/* território da empresa */}
+              <circle cx={cluster.hubX} cy={CY} r={RING_R} fill={cluster.color} fillOpacity="0.035" stroke={cluster.color} strokeOpacity="0.2" strokeWidth="1" strokeDasharray="3 8" />
 
-          {/* Ligações núcleo -> agente, na cor da empresa */}
-          {groups.map(group =>
-            group.nodes.map(node => {
-              const working = node.agent.state === 'working';
-              const [x1, y1] = polar(46, node.angle);
-              return (
+              {/* núcleo -> hub da empresa */}
+              <line
+                x1={CORE_X + (cluster.hubX < CORE_X ? -CORE_R : CORE_R)}
+                y1={CY}
+                x2={cluster.hubX + (cluster.hubX < CORE_X ? HUB_R : -HUB_R)}
+                y2={CY}
+                stroke={cluster.color}
+                strokeOpacity="0.55"
+                strokeWidth="1.6"
+              />
+
+              {/* hub -> agente */}
+              {cluster.nodes.map(node => (
                 <line
-                  key={`spoke-${node.agent.id}`}
-                  x1={x1}
-                  y1={y1}
+                  key={`spoke-${cluster.id}-${node.agent.id}`}
+                  x1={cluster.hubX}
+                  y1={CY}
                   x2={node.x}
                   y2={node.y}
-                  stroke={group.color}
-                  strokeOpacity={working ? 0.65 : 0.22}
-                  strokeWidth={working ? 1.6 : 1}
-                  strokeDasharray="2 6"
+                  stroke={node.connected ? cluster.color : OFF_STROKE}
+                  strokeOpacity={node.connected ? (node.agent.state === 'working' ? 0.6 : 0.3) : 0.5}
+                  strokeWidth={node.connected && node.agent.state === 'working' ? 1.5 : 1}
+                  strokeDasharray={node.connected ? '2 5' : '1 6'}
                 />
-              );
-            })
-          )}
+              ))}
 
-          {/* Núcleo */}
+              {/* hub da empresa */}
+              <circle cx={cluster.hubX} cy={CY} r={HUB_R} fill="#120e0a" stroke={cluster.color} strokeWidth="1.6" />
+              <text x={cluster.hubX} y={CY + 3} textAnchor="middle" className="mono" fill={cluster.color} style={{ fontSize: 11, fontWeight: 700 }}>
+                {cluster.connectedCount}/{roster.length}
+              </text>
+              <text x={cluster.hubX} y={CY - HUB_R - 14} textAnchor="middle" className="display" fill={cluster.color} style={{ fontSize: 14, letterSpacing: 1.4 }}>
+                {cluster.label}
+              </text>
+              <text x={cluster.hubX} y={CY + HUB_R + 20} textAnchor="middle" className="mono" fill="#8a7c68" style={{ fontSize: 8.5, letterSpacing: 0.6 }}>
+                LIGADOS
+              </text>
+
+              {/* agentes */}
+              {cluster.nodes.map(node => {
+                const state = normalise(node.agent);
+                const isSelected = selected && selected.agentId === node.agent.id && selected.companyId === cluster.id;
+                const lines = wrapLabel(node.agent.label);
+
+                return (
+                  <g
+                    key={`node-${cluster.id}-${node.agent.id}`}
+                    onClick={() => setSelected(isSelected ? null : { agentId: node.agent.id, companyId: cluster.id })}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <circle cx={node.x} cy={node.y} r="22" fill="transparent" />
+
+                    {node.connected && state === 'working' && (
+                      <circle cx={node.x} cy={node.y} r={NODE_R} fill="none" stroke={STATE_COLOR.working} strokeWidth="1.3">
+                        <animate attributeName="r" values={`${NODE_R};${NODE_R + 8};${NODE_R}`} dur="2.4s" repeatCount="indefinite" />
+                        <animate attributeName="opacity" values="0.8;0;0.8" dur="2.4s" repeatCount="indefinite" />
+                      </circle>
+                    )}
+
+                    <circle
+                      cx={node.x}
+                      cy={node.y}
+                      r={NODE_R}
+                      fill="#120e0a"
+                      stroke={node.connected ? cluster.color : OFF_STROKE}
+                      strokeWidth={isSelected ? 2.8 : node.connected ? 1.8 : 1.2}
+                    />
+                    {node.connected ? (
+                      <circle cx={node.x} cy={node.y} r="3.8" fill={STATE_COLOR[state]} filter={state === 'idle' ? undefined : 'url(#topo-glow)'} />
+                    ) : (
+                      <circle cx={node.x} cy={node.y} r="2.4" fill={OFF_STROKE} fillOpacity="0.7" />
+                    )}
+
+                    {lines.map((line, li) => (
+                      <text
+                        key={li}
+                        x={node.lx}
+                        y={node.ly + li * 10 + (lines.length > 1 ? 0 : 3)}
+                        textAnchor={node.anchor}
+                        className="mono"
+                        fill={isSelected ? '#f5ead6' : node.connected ? '#a89680' : OFF_TEXT}
+                        style={{ fontSize: 8.5, letterSpacing: 0.3 }}
+                      >
+                        {line}
+                      </text>
+                    ))}
+                  </g>
+                );
+              })}
+            </g>
+          ))}
+
+          {/* núcleo */}
           <g>
-            <circle cx={CX} cy={CY} r="42" fill="rgba(240,180,60,0.08)" stroke="#f0b429" strokeWidth="1.4" />
-            <circle cx={CX} cy={CY} r="54" fill="none" stroke="#f0b429" strokeOpacity="0.35" strokeWidth="1" strokeDasharray="4 7">
-              <animateTransform attributeName="transform" type="rotate" from={`0 ${CX} ${CY}`} to={`360 ${CX} ${CY}`} dur="48s" repeatCount="indefinite" />
+            <circle cx={CORE_X} cy={CY} r={CORE_R} fill="rgba(240,180,60,0.08)" stroke="#f0b429" strokeWidth="1.4" />
+            <circle cx={CORE_X} cy={CY} r={CORE_R + 12} fill="none" stroke="#f0b429" strokeOpacity="0.32" strokeWidth="1" strokeDasharray="4 7">
+              <animateTransform attributeName="transform" type="rotate" from={`0 ${CORE_X} ${CY}`} to={`360 ${CORE_X} ${CY}`} dur="48s" repeatCount="indefinite" />
             </circle>
-            <g transform={`translate(${CX - 17}, ${CY - 16}) scale(0.31)`}>
+            <g transform={`translate(${CORE_X - 17}, ${CY - 16}) scale(0.31)`}>
               <VoltMark id="topology-hub" />
             </g>
-            <text x={CX} y={CY + 78} textAnchor="middle" className="display" fill="#f0b429" style={{ fontSize: 15, letterSpacing: 1.5 }}>
+            <text x={CORE_X} y={CY + CORE_R + 28} textAnchor="middle" className="display" fill="#f0b429" style={{ fontSize: 15, letterSpacing: 1.5 }}>
               VOLT CORE
             </text>
           </g>
-
-          {/* Nome da empresa, por fora do seu sector */}
-          {groups.map(group => (
-            <text
-              key={`label-${group.id}`}
-              x={group.labelX}
-              y={group.labelY}
-              textAnchor={anchorFor(group.mid)}
-              className="mono"
-              fill={group.color}
-              style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.2 }}
-            >
-              {group.label}
-            </text>
-          ))}
-
-          {/* Agentes */}
-          {groups.map(group =>
-            group.nodes.map(node => {
-              const agent = node.agent;
-              const state = STATE_COLOR[agent.state] ? agent.state : 'idle';
-              const stateColor = STATE_COLOR[state];
-              const isSelected = agent.id === selectedId;
-              const lines = wrapLabel(agent.label);
-              const outward = Math.sin(node.angle) >= 0 ? 1 : -1;
-              const labelY = node.y + (outward > 0 ? 26 : -20);
-
-              return (
-                <g
-                  key={`node-${agent.id}`}
-                  onClick={() => setSelectedId(isSelected ? null : agent.id)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  {/* área de clique generosa */}
-                  <circle cx={node.x} cy={node.y} r="26" fill="transparent" />
-
-                  {state === 'working' && (
-                    <circle cx={node.x} cy={node.y} r="11" fill="none" stroke={stateColor} strokeWidth="1.4">
-                      <animate attributeName="r" values="11;19;11" dur="2.4s" repeatCount="indefinite" />
-                      <animate attributeName="opacity" values="0.8;0;0.8" dur="2.4s" repeatCount="indefinite" />
-                    </circle>
-                  )}
-
-                  <circle cx={node.x} cy={node.y} r="11" fill="#120e0a" stroke={group.color} strokeWidth={isSelected ? 3 : 1.8} />
-                  <circle cx={node.x} cy={node.y} r="4.4" fill={stateColor} filter={state === 'idle' ? undefined : 'url(#topo-glow)'} />
-
-                  {lines.map((line, li) => (
-                    <text
-                      key={li}
-                      x={node.x}
-                      y={labelY + li * 11}
-                      textAnchor="middle"
-                      className="mono"
-                      fill={isSelected ? '#f5ead6' : '#a89680'}
-                      style={{ fontSize: 9, letterSpacing: 0.4 }}
-                    >
-                      {line}
-                    </text>
-                  ))}
-                </g>
-              );
-            })
-          )}
         </svg>
       </div>
 
       {/* ------------------------------------------------------------- legenda */}
-      <div style={{ width: 274, display: 'flex', flexDirection: 'column', gap: 12, flexShrink: 0 }}>
+      <div style={{ width: 274, display: 'flex', flexDirection: 'column', gap: 12, flexShrink: 0, maxHeight: 'calc(100vh - 170px)' }}>
         <div className="panel" style={{ padding: 14 }}>
-          <div className="panel-title" style={{ marginBottom: 10 }}>ESTADO GERAL</div>
-          {['working', 'error', 'idle'].map(state => (
-            <div key={state} className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
-              <div className="row" style={{ gap: 8 }}>
-                <span style={{ width: 9, height: 9, borderRadius: '50%', background: STATE_COLOR[state], display: 'inline-block' }} />
-                <span className="mono" style={{ fontSize: 10, color: '#a89680' }}>{STATE_LABEL[state]}</span>
+          <div className="panel-title" style={{ marginBottom: 10 }}>COBERTURA</div>
+          {clusters.map(cluster => (
+            <div key={cluster.id} style={{ marginBottom: 10 }}>
+              <div className="row" style={{ justifyContent: 'space-between', marginBottom: 5 }}>
+                <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: cluster.color, letterSpacing: 0.8 }}>{cluster.label}</span>
+                <span className="mono" style={{ fontSize: 10, color: '#a89680' }}>{cluster.connectedCount}/{roster.length}</span>
               </div>
-              <span className="mono" style={{ fontSize: 11, color: '#f5ead6' }}>{counts[state] || 0}</span>
+              <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                <div style={{ width: `${roster.length ? (cluster.connectedCount / roster.length) * 100 : 0}%`, height: '100%', background: cluster.color }} />
+              </div>
             </div>
           ))}
         </div>
 
         <div className="panel" style={{ padding: 14, flex: 1, overflowY: 'auto', minHeight: 0 }}>
-          <div className="panel-title" style={{ marginBottom: 10 }}>POR EMPRESA</div>
-          {groups.map(group => (
-            <div key={group.id} style={{ marginBottom: 14 }}>
-              <div className="row" style={{ gap: 7, marginBottom: 7 }}>
-                <span style={{ width: 3, height: 12, background: group.color, borderRadius: 2, display: 'inline-block' }} />
-                <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: group.color, letterSpacing: 0.8 }}>{group.label}</span>
-                <span className="mono" style={{ fontSize: 9, color: '#8a7c68', marginLeft: 'auto' }}>{group.members.length}</span>
+          {clusters.map(cluster => (
+            <div key={cluster.id} style={{ marginBottom: 16 }}>
+              <div className="row" style={{ gap: 7, marginBottom: 8 }}>
+                <span style={{ width: 3, height: 12, background: cluster.color, borderRadius: 2, display: 'inline-block' }} />
+                <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: cluster.color, letterSpacing: 0.8 }}>{cluster.label}</span>
               </div>
-              <div style={{ display: 'grid', gap: 5 }}>
-                {group.members.map(agent => {
-                  const state = STATE_COLOR[agent.state] ? agent.state : 'idle';
-                  const isSelected = agent.id === selectedId;
+              <div style={{ display: 'grid', gap: 4 }}>
+                {cluster.nodes.map(node => {
+                  const state = normalise(node.agent);
+                  const isSelected = selected && selected.agentId === node.agent.id && selected.companyId === cluster.id;
                   return (
                     <button
                       type="button"
-                      key={agent.id}
-                      onClick={() => setSelectedId(isSelected ? null : agent.id)}
+                      key={`${cluster.id}-${node.agent.id}`}
+                      onClick={() => setSelected(isSelected ? null : { agentId: node.agent.id, companyId: cluster.id })}
                       style={{
                         textAlign: 'left',
-                        padding: '6px 8px',
+                        padding: '5px 8px',
                         borderRadius: 5,
-                        border: `1px solid ${isSelected ? group.color : 'transparent'}`,
-                        borderLeft: `3px solid ${group.color}`,
-                        background: isSelected ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.025)',
+                        border: `1px solid ${isSelected ? cluster.color : 'transparent'}`,
+                        borderLeft: `3px solid ${node.connected ? cluster.color : OFF_STROKE}`,
+                        background: isSelected ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.022)',
                         color: 'inherit',
                         cursor: 'pointer',
                         width: '100%',
+                        opacity: node.connected ? 1 : 0.55,
                       }}
                     >
-                      <div className="row" style={{ justifyContent: 'space-between', gap: 6 }}>
-                        <span style={{ fontSize: 10.5, fontWeight: 600 }}>{agent.label}</span>
-                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: STATE_COLOR[state], flexShrink: 0, marginTop: 4 }} />
+                      <div className="row" style={{ justifyContent: 'space-between', gap: 6, alignItems: 'center' }}>
+                        <span style={{ fontSize: 10, fontWeight: 600 }}>{node.agent.label}</span>
+                        {node.connected ? (
+                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: STATE_COLOR[state], flexShrink: 0 }} />
+                        ) : (
+                          <span className="mono" style={{ fontSize: 7.5, color: OFF_TEXT, flexShrink: 0, letterSpacing: 0.5 }}>POR LIGAR</span>
+                        )}
                       </div>
                     </button>
                   );
@@ -310,20 +319,26 @@ function TopologyView({ agents }) {
           ))}
         </div>
 
-        {selected && (
+        {detail && (
           <div className="panel" style={{ padding: 14 }}>
-            <div className="panel-title" style={{ marginBottom: 8 }}>{selected.label}</div>
-            {selectedCompany && (
-              <div className="mono" style={{ fontSize: 9.5, color: selectedCompany.color, marginBottom: 6, letterSpacing: 0.8 }}>
-                {selectedCompany.label}
+            <div className="panel-title" style={{ marginBottom: 6 }}>{detail.agent.label}</div>
+            <div className="mono" style={{ fontSize: 9.5, color: detail.company.color, marginBottom: 6, letterSpacing: 0.8 }}>
+              {detail.company.label}
+            </div>
+            {detail.connected ? (
+              <>
+                <div className="mono" style={{ fontSize: 10, color: STATE_COLOR[normalise(detail.agent)], marginBottom: 8 }}>
+                  {STATE_LABEL[normalise(detail.agent)]}
+                </div>
+                <div style={{ fontSize: 11, color: '#a89680', lineHeight: 1.5 }}>
+                  {detail.agent.lastActivityText || 'Sem histórico ainda.'}
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 11, color: OFF_TEXT, lineHeight: 1.5 }}>
+                Ainda não ligado a esta empresa. Falta o endpoint do lado da {detail.company.label} para este agente.
               </div>
             )}
-            <div className="mono" style={{ fontSize: 10, color: STATE_COLOR[STATE_COLOR[selected.state] ? selected.state : 'idle'], marginBottom: 8 }}>
-              {STATE_LABEL[STATE_COLOR[selected.state] ? selected.state : 'idle']}
-            </div>
-            <div style={{ fontSize: 11, color: '#a89680', lineHeight: 1.5 }}>
-              {selected.lastActivityText || 'Sem histórico ainda.'}
-            </div>
           </div>
         )}
       </div>
