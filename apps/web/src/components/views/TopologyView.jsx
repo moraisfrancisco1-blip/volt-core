@@ -27,6 +27,15 @@ const COMPANIES = [
   { id: 'daioakes', label: 'DAI OAKES', color: '#e0793c', connected: ['backoffice'] },
 ];
 
+/* Cadeia de investigação reativa: o agente de incidentes ('volt') não é par dos
+ * outros -- investiga primeiro e depois despacha, via post_message(), para o
+ * Dev/Debug e para o Database. Ver apps/api/app/agents/runner.py. */
+const CHAIN = [
+  { from: 'volt', to: 'dev_debug' },
+  { from: 'volt', to: 'database' },
+];
+const CHAIN_COLOR = '#9a8a72';
+
 // Mesma paleta de estados do resto do dashboard (AgentGrid / CoreHero).
 const STATE_COLOR = { working: '#f0b429', error: '#d9614f', idle: '#7d7062' };
 const STATE_LABEL = { working: 'A TRABALHAR', error: 'ERRO', idle: 'EM ESPERA' };
@@ -48,6 +57,22 @@ const ARC_SPAN = (300 * Math.PI) / 180;
 
 function polar(cx, cy, r, a) {
   return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+}
+
+// Arco entre dois agentes do mesmo anel, curvado para dentro (na direção do hub)
+// e encurtado nas duas pontas para a seta não ficar por cima dos nós.
+function chainPath(a, b, hubX) {
+  const cx = hubX + ((a.x + b.x) / 2 - hubX) * 0.6;
+  const cy = CY + ((a.y + b.y) / 2 - CY) * 0.6;
+  const trim = (px, py, by) => {
+    const dx = cx - px;
+    const dy = cy - py;
+    const len = Math.hypot(dx, dy) || 1;
+    return [px + (dx / len) * by, py + (dy / len) * by];
+  };
+  const [sx, sy] = trim(a.x, a.y, NODE_R + 3);
+  const [ex, ey] = trim(b.x, b.y, NODE_R + 7);
+  return `M${sx},${sy} Q${cx},${cy} ${ex},${ey}`;
 }
 
 // Etiquetas longas ("INTELIGÊNCIA DE MERCADO") partidas em duas linhas o mais
@@ -104,7 +129,8 @@ function TopologyView({ agents }) {
         return { agent, angle, x, y, lx, ly, anchor, connected: company.connected.includes(agent.id) };
       });
       const connectedCount = nodes.filter(n => n.connected).length;
-      return { ...company, hubX, nodes, connectedCount };
+      const nodeById = Object.fromEntries(nodes.map(n => [n.agent.id, n]));
+      return { ...company, hubX, nodes, nodeById, connectedCount };
     });
   }, [roster]);
 
@@ -136,6 +162,9 @@ function TopologyView({ agents }) {
                 <feMergeNode in="SourceGraphic" />
               </feMerge>
             </filter>
+            <marker id="topo-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+              <path d="M0,1 L9,5 L0,9 z" fill={CHAIN_COLOR} />
+            </marker>
             <radialGradient id="topo-core-glow">
               <stop offset="0%" stopColor="#f0b429" stopOpacity="0.22" />
               <stop offset="100%" stopColor="#f0b429" stopOpacity="0" />
@@ -174,6 +203,24 @@ function TopologyView({ agents }) {
                   strokeDasharray={node.connected ? '2 5' : '1 6'}
                 />
               ))}
+
+              {/* cadeia de investigação: incidentes -> dev/debug e database */}
+              {CHAIN.map(link => {
+                const a = cluster.nodeById[link.from];
+                const b = cluster.nodeById[link.to];
+                if (!a || !b) return null;
+                return (
+                  <path
+                    key={`chain-${cluster.id}-${link.from}-${link.to}`}
+                    d={chainPath(a, b, cluster.hubX)}
+                    fill="none"
+                    stroke={CHAIN_COLOR}
+                    strokeOpacity="0.75"
+                    strokeWidth="1.3"
+                    markerEnd="url(#topo-arrow)"
+                  />
+                );
+              })}
 
               {/* hub da empresa */}
               <circle cx={cluster.hubX} cy={CY} r={HUB_R} fill="#120e0a" stroke={cluster.color} strokeWidth="1.6" />
@@ -272,6 +319,16 @@ function TopologyView({ agents }) {
               </div>
             </div>
           ))}
+
+          <div className="row" style={{ gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+            <svg width="26" height="9" style={{ flexShrink: 0, overflow: 'visible' }}>
+              <path d="M0,4.5 L18,4.5" stroke={CHAIN_COLOR} strokeWidth="1.3" fill="none" />
+              <path d="M17,1 L25,4.5 L17,8 z" fill={CHAIN_COLOR} />
+            </svg>
+            <span className="mono" style={{ fontSize: 9, color: '#8a7c68', lineHeight: 1.4 }}>
+              CADEIA DE INVESTIGAÇÃO
+            </span>
+          </div>
         </div>
 
         <div className="panel" style={{ padding: 14, flex: 1, overflowY: 'auto', minHeight: 0 }}>

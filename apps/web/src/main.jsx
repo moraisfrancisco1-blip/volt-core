@@ -36,7 +36,10 @@ const INVESTIGATIONS_FETCH_LIMIT = 100;
 // backend (apps/api/app/agents/*_runner.py and agents/status_router.py).
 const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations', 'backoffice', 'customer'];
 const AGENT_LABELS = {
-  volt: ['VOLT', 'voice_call_failure'],
+  // O id continua 'volt' (é o que a API devolve); só a etiqueta mudou, para não
+  // colidir com o nome do próprio Volt Core. É o investigador de incidentes:
+  // dispara quando uma chamada de escalonamento P1-P3 não é confirmada.
+  volt: ['INCIDENTES', 'voice_call_failure'],
   dev_debug: ['DEV/DEBUG', 'code_diagnosis'],
   database: ['DATABASE', 'database_diagnosis'],
   finance: ['FINANCE', 'finance_diagnosis'],
