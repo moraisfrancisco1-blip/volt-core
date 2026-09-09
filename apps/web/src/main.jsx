@@ -22,6 +22,7 @@ import CustomerPanel from './components/CustomerPanel.jsx';
 import DetailModal from './components/DetailModal.jsx';
 import VoltCoreView from './components/views/VoltCoreView.jsx';
 import AgentsView from './components/views/AgentsView.jsx';
+import TopologyView from './components/views/TopologyView.jsx';
 import EscalationsView from './components/views/EscalationsView.jsx';
 import EventsView from './components/views/EventsView.jsx';
 import IntegrationsView from './components/views/IntegrationsView.jsx';
@@ -342,6 +343,7 @@ function App() {
         />
       );
     }
+    if (view === 'topology') return <TopologyView agents={agentsForGrid} />;
     if (view === 'escalations') return <EscalationsView escalations={escalations} onSelect={openEscalationDetail} />;
     if (view === 'events') return <EventsView events={events} onSelect={openEventDetail} />;
     if (view === 'integrations') return <IntegrationsView integrations={integrationsStatus} railwayConfigured={railwayConfigured} />;
