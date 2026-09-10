@@ -2,7 +2,17 @@ import json
 
 from app.agents import backoffice_agent, daioakes_client, stripe_tools
 from app.db import session_scope
-from app.models import AuditRecord, BackOfficeReconciliationRecord, BackOfficeReportRecord, DaiOakesPaymentRecord, DealRecord, SalesLeadRecord
+from app.models import (
+    AuditRecord,
+    BackOfficeReconciliationRecord,
+    BackOfficeReportRecord,
+    DaiOakesBookingsSnapshotRecord,
+    DaiOakesClientsSnapshotRecord,
+    DaiOakesPaymentRecord,
+    DaiOakesSystemHealthSnapshotRecord,
+    DealRecord,
+    SalesLeadRecord,
+)
 
 
 def _seed_lead(**overrides) -> int:
@@ -339,3 +349,163 @@ def test_dai_oakes_sync_malformed_response_shape_is_a_plain_failure_not_an_incid
         # before this call rather than assuming a pristine table (other tests in this
         # same shared-DB run legitimately insert their own Dai Oakes rows first).
         assert session.query(DaiOakesPaymentRecord).count() == before_count
+
+
+# --- Round 2: bookings-summary -- aggregate-only, whole-object rejection ------------------
+
+def test_dai_oakes_bookings_sync_stores_a_snapshot_on_success(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_bookings_summary", lambda: {"data": {"summary": {
+        "totalBookings": 42, "todayCount": 3, "next7DaysCount": 11,
+        "byStatus": {"confirmed": 30, "cancelled": 12}, "byLocation": None, "byDepositStatus": None,
+    }}})
+
+    backoffice_agent._sync_dai_oakes_bookings()
+
+    with session_scope() as session:
+        row = session.query(DaiOakesBookingsSnapshotRecord).order_by(DaiOakesBookingsSnapshotRecord.id.desc()).first()
+        assert row is not None
+        assert row.total_bookings == 42
+        assert row.today_count == 3
+        assert row.next_7_days_count == 11
+        assert row.by_status == {"confirmed": 30, "cancelled": 12}
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_bookings_sync_completed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+
+
+def test_dai_oakes_bookings_sync_rejects_unexpected_top_level_field(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_bookings_summary", lambda: {"data": {"summary": {
+        "totalBookings": 1, "todayCount": 0, "next7DaysCount": 0, "clientName": "Someone Real",
+    }}})
+
+    with session_scope() as session:
+        before_count = session.query(DaiOakesBookingsSnapshotRecord).count()
+
+    backoffice_agent._sync_dai_oakes_bookings()
+
+    with session_scope() as session:
+        assert session.query(DaiOakesBookingsSnapshotRecord).count() == before_count
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_security_incident_failed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+        payload = json.loads(audit.detail)
+        assert payload["endpoint"] == "bookings-summary"
+        assert "clientName" in payload["unexpected_fields"]
+        assert "Someone Real" not in audit.detail
+
+
+def test_dai_oakes_bookings_sync_skipped_when_key_not_configured(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_bookings_summary", lambda: {"error": "VOLT_CORE_SERVICE_KEY_DAIOAKES not configured"})
+    backoffice_agent._sync_dai_oakes_bookings()
+    with session_scope() as session:
+        audit = session.query(AuditRecord).filter_by(type="dai_oakes_bookings_sync_skipped").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+
+
+def test_dai_oakes_bookings_sync_malformed_shape_is_a_plain_failure(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_bookings_summary", lambda: {"data": {"summary": ["not", "an", "object"]}})
+    backoffice_agent._sync_dai_oakes_bookings()
+    with session_scope() as session:
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_bookings_sync_failed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+
+
+# --- Round 2: clients-summary -- especially sensitive, only two bare counts allowed -------
+
+def test_dai_oakes_clients_sync_stores_a_snapshot_on_success(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_clients_summary", lambda: {"data": {"summary": {
+        "totalClients": 250, "newClientsLast30Days": 14,
+    }}})
+
+    backoffice_agent._sync_dai_oakes_clients()
+
+    with session_scope() as session:
+        row = session.query(DaiOakesClientsSnapshotRecord).order_by(DaiOakesClientsSnapshotRecord.id.desc()).first()
+        assert row is not None
+        assert row.total_clients == 250
+        assert row.new_clients_last_30_days == 14
+
+
+def test_dai_oakes_clients_sync_rejects_any_extra_field_even_one(monkeypatch):
+    # This endpoint is the most sensitive of the three -- it is explicitly built to
+    # return only two bare counts, so anything else (even something that looks harmless,
+    # e.g. an age bracket or a city breakdown) must reject the whole object.
+    monkeypatch.setattr(daioakes_client, "get_clients_summary", lambda: {"data": {"summary": {
+        "totalClients": 250, "newClientsLast30Days": 14, "averageAge": 42,
+    }}})
+
+    with session_scope() as session:
+        before_count = session.query(DaiOakesClientsSnapshotRecord).count()
+
+    backoffice_agent._sync_dai_oakes_clients()
+
+    with session_scope() as session:
+        assert session.query(DaiOakesClientsSnapshotRecord).count() == before_count
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_security_incident_failed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+        payload = json.loads(audit.detail)
+        assert payload["endpoint"] == "clients-summary"
+        assert payload["unexpected_fields"] == ["averageAge"]
+
+
+# --- Round 2: system-health -- nested per-channel allowlists (webhooks/emails/messages) ---
+
+def test_dai_oakes_system_health_sync_stores_a_snapshot_on_success(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_system_health", lambda: {"data": {"summary": {
+        "webhooks": {"failedTotal": 2, "processedTotal": 500, "failedLast24h": 0},
+        "emails": {"sentLast24h": 10, "failedLast24h": 0},
+        "messages": {"sentLast24h": 4, "failedLast24h": 1},
+        "adminActionsLast24h": 6,
+        "loginRateLimitHitsLast24h": 0,
+    }}})
+
+    backoffice_agent._sync_dai_oakes_system_health()
+
+    with session_scope() as session:
+        row = session.query(DaiOakesSystemHealthSnapshotRecord).order_by(DaiOakesSystemHealthSnapshotRecord.id.desc()).first()
+        assert row is not None
+        assert row.webhooks_failed_total == 2
+        assert row.webhooks_processed_total == 500
+        assert row.emails_sent_last_24h == 10
+        assert row.messages_failed_last_24h == 1
+        assert row.admin_actions_last_24h == 6
+
+
+def test_dai_oakes_system_health_sync_rejects_unexpected_nested_field(monkeypatch):
+    # The unexpected field lives inside the nested "emails" object, not at the top level --
+    # the incident detail must still name it (prefixed so it's traceable), and nothing
+    # must be stored, same whole-object-rejection discipline as the flat endpoints.
+    monkeypatch.setattr(daioakes_client, "get_system_health", lambda: {"data": {"summary": {
+        "webhooks": {"failedTotal": 0, "processedTotal": 0, "failedLast24h": 0},
+        "emails": {"sentLast24h": 10, "failedLast24h": 0, "recipientEmail": "someone@example.com"},
+        "messages": {"sentLast24h": 0, "failedLast24h": 0},
+        "adminActionsLast24h": 0,
+        "loginRateLimitHitsLast24h": 0,
+    }}})
+
+    with session_scope() as session:
+        before_count = session.query(DaiOakesSystemHealthSnapshotRecord).count()
+
+    backoffice_agent._sync_dai_oakes_system_health()
+
+    with session_scope() as session:
+        assert session.query(DaiOakesSystemHealthSnapshotRecord).count() == before_count
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_security_incident_failed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+        payload = json.loads(audit.detail)
+        assert payload["endpoint"] == "system-health"
+        assert "emails.recipientEmail" in payload["unexpected_fields"]
+        assert "someone@example.com" not in audit.detail
+
+
+def test_dai_oakes_system_health_sync_rejects_when_nested_object_is_not_a_dict(monkeypatch):
+    monkeypatch.setattr(daioakes_client, "get_system_health", lambda: {"data": {"summary": {
+        "webhooks": "not an object", "emails": {}, "messages": {},
+        "adminActionsLast24h": 0, "loginRateLimitHitsLast24h": 0,
+    }}})
+
+    backoffice_agent._sync_dai_oakes_system_health()
+
+    with session_scope() as session:
+        audit = session.query(AuditRecord).filter_by(type="backoffice_dai_oakes_security_incident_failed").order_by(AuditRecord.id.desc()).first()
+        assert audit is not None
+        payload = json.loads(audit.detail)
+        assert "webhooks: not an object" in payload["unexpected_fields"]

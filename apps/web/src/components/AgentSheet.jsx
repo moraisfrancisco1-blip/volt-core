@@ -107,6 +107,13 @@ const AGENT_SPEC = {
     tools: ['Dai Oakes · controlo de pagamentos', 'Stripe'],
     tasks: ['Relatório de back office', 'Reconciliação', 'Pagamento Dai Oakes'],
   },
+  dai_oakes_intelligence: {
+    rung: 'autonomous',
+    what: 'Lê os agregados que o Back Office já sincronizou (pagamentos, marcações, clientes, saúde do sistema) e grava um resumo semanal em linguagem simples. Nunca chama a API da Dai Oakes diretamente — só lê a própria base de dados do Volt Core.',
+    creds: ['ANTHROPIC_API_KEY'],
+    tools: ['Base de dados Volt Core · snapshots Dai Oakes'],
+    tasks: ['Relatório de inteligência Dai Oakes semanal'],
+  },
   sales: {
     rung: 'proposes',
     what: 'Qualifica leads e escreve o outreach. Puxa também os tenants reais da VoltarisOS, que entram só para receber boas-vindas.',

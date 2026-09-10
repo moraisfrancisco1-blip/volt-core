@@ -9,7 +9,17 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AuditRecord, BackOfficeReconciliationRecord, BackOfficeReportRecord, DaiOakesPaymentRecord, DealRecord, SalesLeadRecord
+from ..models import (
+    AuditRecord,
+    BackOfficeReconciliationRecord,
+    BackOfficeReportRecord,
+    DaiOakesBookingsSnapshotRecord,
+    DaiOakesClientsSnapshotRecord,
+    DaiOakesPaymentRecord,
+    DaiOakesSystemHealthSnapshotRecord,
+    DealRecord,
+    SalesLeadRecord,
+)
 from . import daioakes_client, stripe_config, stripe_tools
 
 # Reconciliation involves a live Stripe call, unlike Operations' pure-DB sweep -- same
@@ -159,6 +169,156 @@ def _sync_dai_oakes_payments() -> None:
         session.add(AuditRecord(type="backoffice_dai_oakes_sync_completed", detail=f"entries={len(safe_entries)}"))
 
 
+def _extract_safe_summary(raw_summary, allowlist: set[str]) -> tuple[dict, list[str]] | None:
+    # Same discipline as _extract_safe_dai_oakes_entries above, but for a single aggregate
+    # object instead of a list of per-record entries -- the Round 2 endpoints
+    # (bookings-summary, clients-summary, system-health) each return one summary object,
+    # not per-record rows. Any top-level key outside the allowlist rejects the whole
+    # object (nothing stored) rather than silently dropping just that key.
+    if not isinstance(raw_summary, dict):
+        return None
+    unexpected = sorted(set(raw_summary.keys()) - allowlist)
+    if unexpected:
+        return {}, unexpected
+    return {k: v for k, v in raw_summary.items() if k in allowlist}, []
+
+
+_DAIOAKES_BOOKINGS_SUMMARY_ALLOWLIST = {
+    "totalBookings", "todayCount", "next7DaysCount", "byStatus", "byLocation", "byDepositStatus",
+}
+
+
+def _sync_dai_oakes_bookings() -> None:
+    result = daioakes_client.get_bookings_summary()
+
+    with session_scope() as session:
+        if "error" in result:
+            error_text = result["error"]
+            audit_type = "dai_oakes_bookings_sync_skipped" if error_text.endswith("not configured") else "dai_oakes_bookings_sync_failed"
+            session.add(AuditRecord(type=audit_type, detail=error_text[:500]))
+            return
+
+        raw = result.get("data")
+        raw_summary = raw.get("summary") if isinstance(raw, dict) else None
+        extraction = _extract_safe_summary(raw_summary, _DAIOAKES_BOOKINGS_SUMMARY_ALLOWLIST) if raw_summary is not None else None
+        if extraction is None:
+            session.add(AuditRecord(type="backoffice_dai_oakes_bookings_sync_failed", detail="unexpected /api/service/bookings-summary response shape"))
+            return
+
+        safe, unexpected_fields = extraction
+        if unexpected_fields:
+            session.add(AuditRecord(
+                type="backoffice_dai_oakes_security_incident_failed",
+                detail=json.dumps({"endpoint": "bookings-summary", "unexpected_fields": unexpected_fields}),
+            ))
+            return
+
+        session.add(DaiOakesBookingsSnapshotRecord(
+            total_bookings=int(safe.get("totalBookings") or 0),
+            today_count=int(safe.get("todayCount") or 0),
+            next_7_days_count=int(safe.get("next7DaysCount") or 0),
+            by_status=safe.get("byStatus") if isinstance(safe.get("byStatus"), dict) else None,
+            by_location=safe.get("byLocation") if isinstance(safe.get("byLocation"), dict) else None,
+            by_deposit_status=safe.get("byDepositStatus") if isinstance(safe.get("byDepositStatus"), dict) else None,
+        ))
+        session.add(AuditRecord(type="backoffice_dai_oakes_bookings_sync_completed", detail=f"total={safe.get('totalBookings')}"))
+
+
+_DAIOAKES_CLIENTS_SUMMARY_ALLOWLIST = {"totalClients", "newClientsLast30Days"}
+
+
+def _sync_dai_oakes_clients() -> None:
+    result = daioakes_client.get_clients_summary()
+
+    with session_scope() as session:
+        if "error" in result:
+            error_text = result["error"]
+            audit_type = "dai_oakes_clients_sync_skipped" if error_text.endswith("not configured") else "dai_oakes_clients_sync_failed"
+            session.add(AuditRecord(type=audit_type, detail=error_text[:500]))
+            return
+
+        raw = result.get("data")
+        raw_summary = raw.get("summary") if isinstance(raw, dict) else None
+        extraction = _extract_safe_summary(raw_summary, _DAIOAKES_CLIENTS_SUMMARY_ALLOWLIST) if raw_summary is not None else None
+        if extraction is None:
+            session.add(AuditRecord(type="backoffice_dai_oakes_clients_sync_failed", detail="unexpected /api/service/clients-summary response shape"))
+            return
+
+        safe, unexpected_fields = extraction
+        if unexpected_fields:
+            # Especially sensitive endpoint -- if it ever returns anything beyond the two
+            # bare counts it was built to return (e.g. a regression on the Dai Oakes side
+            # re-adds a client-identifying field), reject and flag rather than store it.
+            session.add(AuditRecord(
+                type="backoffice_dai_oakes_security_incident_failed",
+                detail=json.dumps({"endpoint": "clients-summary", "unexpected_fields": unexpected_fields}),
+            ))
+            return
+
+        session.add(DaiOakesClientsSnapshotRecord(
+            total_clients=int(safe.get("totalClients") or 0),
+            new_clients_last_30_days=int(safe.get("newClientsLast30Days") or 0),
+        ))
+        session.add(AuditRecord(type="backoffice_dai_oakes_clients_sync_completed", detail=f"total={safe.get('totalClients')}"))
+
+
+_DAIOAKES_SYSTEM_HEALTH_SUMMARY_ALLOWLIST = {"webhooks", "emails", "messages", "adminActionsLast24h", "loginRateLimitHitsLast24h"}
+_DAIOAKES_SYSTEM_HEALTH_WEBHOOKS_ALLOWLIST = {"failedTotal", "processedTotal", "failedLast24h"}
+_DAIOAKES_SYSTEM_HEALTH_EMAILS_ALLOWLIST = {"sentLast24h", "failedLast24h"}
+_DAIOAKES_SYSTEM_HEALTH_MESSAGES_ALLOWLIST = {"sentLast24h", "failedLast24h"}
+
+
+def _sync_dai_oakes_system_health() -> None:
+    result = daioakes_client.get_system_health()
+
+    with session_scope() as session:
+        if "error" in result:
+            error_text = result["error"]
+            audit_type = "dai_oakes_system_health_sync_skipped" if error_text.endswith("not configured") else "dai_oakes_system_health_sync_failed"
+            session.add(AuditRecord(type=audit_type, detail=error_text[:500]))
+            return
+
+        raw = result.get("data")
+        raw_summary = raw.get("summary") if isinstance(raw, dict) else None
+        extraction = _extract_safe_summary(raw_summary, _DAIOAKES_SYSTEM_HEALTH_SUMMARY_ALLOWLIST) if raw_summary is not None else None
+        if extraction is None:
+            session.add(AuditRecord(type="backoffice_dai_oakes_system_health_sync_failed", detail="unexpected /api/service/system-health response shape"))
+            return
+
+        safe, unexpected_fields = extraction
+        webhooks_extraction = _extract_safe_summary(safe.get("webhooks"), _DAIOAKES_SYSTEM_HEALTH_WEBHOOKS_ALLOWLIST)
+        emails_extraction = _extract_safe_summary(safe.get("emails"), _DAIOAKES_SYSTEM_HEALTH_EMAILS_ALLOWLIST)
+        messages_extraction = _extract_safe_summary(safe.get("messages"), _DAIOAKES_SYSTEM_HEALTH_MESSAGES_ALLOWLIST)
+
+        nested_unexpected: list[str] = list(unexpected_fields)
+        for prefix, nested in (("webhooks", webhooks_extraction), ("emails", emails_extraction), ("messages", messages_extraction)):
+            if nested is None:
+                nested_unexpected.append(f"{prefix}: not an object")
+            else:
+                nested_unexpected += [f"{prefix}.{field}" for field in nested[1]]
+
+        if nested_unexpected:
+            session.add(AuditRecord(
+                type="backoffice_dai_oakes_security_incident_failed",
+                detail=json.dumps({"endpoint": "system-health", "unexpected_fields": nested_unexpected}),
+            ))
+            return
+
+        webhooks, emails, messages = webhooks_extraction[0], emails_extraction[0], messages_extraction[0]
+        session.add(DaiOakesSystemHealthSnapshotRecord(
+            webhooks_failed_total=int(webhooks.get("failedTotal") or 0),
+            webhooks_processed_total=int(webhooks.get("processedTotal") or 0),
+            webhooks_failed_last_24h=int(webhooks.get("failedLast24h") or 0),
+            emails_sent_last_24h=int(emails.get("sentLast24h") or 0),
+            emails_failed_last_24h=int(emails.get("failedLast24h") or 0),
+            messages_sent_last_24h=int(messages.get("sentLast24h") or 0),
+            messages_failed_last_24h=int(messages.get("failedLast24h") or 0),
+            admin_actions_last_24h=int(safe.get("adminActionsLast24h") or 0),
+            login_rate_limit_hits_last_24h=int(safe.get("loginRateLimitHitsLast24h") or 0),
+        ))
+        session.add(AuditRecord(type="backoffice_dai_oakes_system_health_sync_completed", detail="ok"))
+
+
 def _fetch_sandbox_invoices() -> tuple[str, dict[str, dict] | None]:
     # Returns (data_source, invoices_by_email). invoices_by_email is None whenever there
     # is nothing to match against (no key configured, or the call failed) -- callers
@@ -262,6 +422,9 @@ def run_backoffice_sweep() -> None:
         _reconcile_closed_deals()
         run_generate_report()
         _sync_dai_oakes_payments()
+        _sync_dai_oakes_bookings()
+        _sync_dai_oakes_clients()
+        _sync_dai_oakes_system_health()
     except Exception as exc:
         with session_scope() as session:
             session.add(AuditRecord(type="backoffice_sweep_failed", detail=f"{type(exc).__name__}: {str(exc)[:500]}"))
