@@ -1,4 +1,4 @@
-from app.agents import agent_inbox, backoffice_agent, customer_agent, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
+from app.agents import agent_inbox, backoffice_agent, customer_agent, dai_oakes_intelligence, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
 from app.agents.status_router import agents_status
 from app.db import session_scope
 from app.models import AgentInvestigationRecord, AuditRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord
@@ -22,10 +22,11 @@ def _seed_report(status: str) -> None:
         session.add(MarketIntelligenceReportRecord(status=status))
 
 
-def test_agents_status_returns_all_twelve_agents_with_valid_states(monkeypatch):
+def test_agents_status_returns_all_thirteen_agents_with_valid_states(monkeypatch):
     monkeypatch.setattr(agent_inbox, "_current_message_type", None)
     monkeypatch.setattr(production_monitor, "_sweep_in_progress", False)
     monkeypatch.setattr(market_intelligence, "_sweep_in_progress", False)
+    monkeypatch.setattr(dai_oakes_intelligence, "_sweep_in_progress", False)
     monkeypatch.setattr(sales_agent, "_sweep_in_progress", False)
     monkeypatch.setattr(deals_agent, "_sweep_in_progress", False)
     monkeypatch.setattr(marketing_agent, "_sweep_in_progress", False)
@@ -39,7 +40,7 @@ def test_agents_status_returns_all_twelve_agents_with_valid_states(monkeypatch):
     # rows, so this doesn't assert "no history" -- only that every agent is represented
     # with a well-formed state, which is what a genuinely empty VOLT CORE instance
     # would also see (idle, null last_activity_at) before any incident ever occurs.
-    assert set(results.keys()) == {"volt", "dev_debug", "database", "finance", "production_monitor", "market_intelligence", "sales", "deals", "marketing", "operations", "backoffice", "customer"}
+    assert set(results.keys()) == {"volt", "dev_debug", "database", "finance", "production_monitor", "market_intelligence", "dai_oakes_intelligence", "sales", "deals", "marketing", "operations", "backoffice", "customer"}
     for row in results.values():
         assert row["state"] in {"idle", "error", "working"}
 

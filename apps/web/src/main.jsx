@@ -13,6 +13,7 @@ import SystemMonitor from './components/SystemMonitor.jsx';
 import InvestigationHistory from './components/InvestigationHistory.jsx';
 import IntegrationsPanel from './components/IntegrationsPanel.jsx';
 import MarketIntelligencePanel from './components/MarketIntelligencePanel.jsx';
+import DaiOakesIntelligencePanel from './components/DaiOakesIntelligencePanel.jsx';
 import SalesPanel from './components/SalesPanel.jsx';
 import DealsPanel from './components/DealsPanel.jsx';
 import MarketingPanel from './components/MarketingPanel.jsx';
@@ -24,6 +25,7 @@ import VoltCoreView from './components/views/VoltCoreView.jsx';
 import AgentsView from './components/views/AgentsView.jsx';
 import TopologyView from './components/views/TopologyView.jsx';
 import FunnelView from './components/views/FunnelView.jsx';
+import OrgChartView from './components/views/OrgChartView.jsx';
 import EscalationsView from './components/views/EscalationsView.jsx';
 import EventsView from './components/views/EventsView.jsx';
 import IntegrationsView from './components/views/IntegrationsView.jsx';
@@ -35,7 +37,7 @@ const INVESTIGATIONS_FETCH_LIMIT = 100;
 
 // Mirrors each reactive agent's investigation_type -- kept in sync manually with the
 // backend (apps/api/app/agents/*_runner.py and agents/status_router.py).
-const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations', 'backoffice', 'customer'];
+const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations', 'backoffice', 'dai_oakes_intelligence', 'customer'];
 const AGENT_LABELS = {
   // O id continua 'volt' (é o que a API devolve); só a etiqueta mudou, para não
   // colidir com o nome do próprio Volt Core. É o investigador de incidentes:
@@ -51,6 +53,7 @@ const AGENT_LABELS = {
   marketing: ['MARKETING', null],
   operations: ['OPERATIONS', null],
   backoffice: ['BACK OFFICE', null],
+  dai_oakes_intelligence: ['DAI OAKES · INTELIGÊNCIA', null],
   customer: ['CUSTOMER', null],
 };
 
@@ -89,6 +92,7 @@ function App() {
   const [recurringTasks, setRecurringTasks] = useState([]);
   const [backofficeReports, setBackofficeReports] = useState([]);
   const [backofficeReconciliations, setBackofficeReconciliations] = useState([]);
+  const [daiOakesIntelReports, setDaiOakesIntelReports] = useState([]);
   const [paymentControlSummary, setPaymentControlSummary] = useState(null);
   const [paymentControlPayments, setPaymentControlPayments] = useState([]);
   const [customerQueries, setCustomerQueries] = useState([]);
@@ -103,7 +107,7 @@ function App() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, expansionSignalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, paymentControlSummaryResponse, paymentControlPaymentsResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, expansionSignalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, paymentControlSummaryResponse, paymentControlPaymentsResponse, daiOakesIntelResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
@@ -124,6 +128,7 @@ function App() {
         fetch(`${API}/api/backoffice/reconciliations?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/backoffice/payment-control-summary`, { cache: 'no-store' }),
         fetch(`${API}/api/backoffice/dai-oakes-payments?limit=10`, { cache: 'no-store' }),
+        fetch(`${API}/api/dai-oakes-intelligence-reports?limit=10`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-queries?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-response-drafts?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-query-patterns?limit=20`, { cache: 'no-store' }),
@@ -150,6 +155,7 @@ function App() {
       if (!backofficeReconciliationsResponse.ok) throw new Error(`backoffice reconciliations unavailable (${backofficeReconciliationsResponse.status})`);
       if (!paymentControlSummaryResponse.ok) throw new Error(`payment control summary unavailable (${paymentControlSummaryResponse.status})`);
       if (!paymentControlPaymentsResponse.ok) throw new Error(`payment control payments unavailable (${paymentControlPaymentsResponse.status})`);
+      if (!daiOakesIntelResponse.ok) throw new Error(`dai oakes intelligence reports unavailable (${daiOakesIntelResponse.status})`);
       if (!customerQueriesResponse.ok) throw new Error(`customer queries unavailable (${customerQueriesResponse.status})`);
       if (!customerDraftsResponse.ok) throw new Error(`customer response drafts unavailable (${customerDraftsResponse.status})`);
       if (!customerPatternsResponse.ok) throw new Error(`customer query patterns unavailable (${customerPatternsResponse.status})`);
@@ -175,6 +181,7 @@ function App() {
       setBackofficeReconciliations(await backofficeReconciliationsResponse.json());
       setPaymentControlSummary(await paymentControlSummaryResponse.json());
       setPaymentControlPayments(await paymentControlPaymentsResponse.json());
+      setDaiOakesIntelReports(await daiOakesIntelResponse.json());
       setCustomerQueries(await customerQueriesResponse.json());
       setCustomerDrafts(await customerDraftsResponse.json());
       setCustomerPatterns(await customerPatternsResponse.json());
@@ -225,6 +232,9 @@ function App() {
     } else if (agentId === 'backoffice') {
       const latestReport = backofficeReports[0];
       lastActivityText = latestReport ? truncate(latestReport.summary) : '';
+    } else if (agentId === 'dai_oakes_intelligence') {
+      const latest = daiOakesIntelReports[0];
+      lastActivityText = latest ? truncate(latest.error || latest.alerts_summary || 'sem resumo') : '';
     } else if (agentId === 'customer') {
       const latestQuery = customerQueries[0];
       lastActivityText = latestQuery ? truncate(`${latestQuery.status === 'sensitive_escalated' ? 'Sinalizado' : 'Triagem'} — ${latestQuery.question}`) : '';
@@ -349,6 +359,7 @@ function App() {
     }
     if (view === 'topology') return <TopologyView agents={agentsForGrid} integrations={integrationsStatus} />;
     if (view === 'funnel') return <FunnelView leads={salesLeads} drafts={salesDrafts} deals={deals} />;
+    if (view === 'orgchart') return <OrgChartView agents={agentsForGrid} integrations={integrationsStatus} />;
     if (view === 'escalations') return <EscalationsView escalations={escalations} onSelect={openEscalationDetail} />;
     if (view === 'events') return <EventsView events={events} onSelect={openEventDetail} />;
     if (view === 'integrations') return <IntegrationsView integrations={integrationsStatus} railwayConfigured={railwayConfigured} />;
@@ -442,6 +453,10 @@ function App() {
             paymentControlPayments={paymentControlPayments}
             onSelectReconciliation={openReconciliationDetail}
           />
+        </div>
+
+        <div className="row-4">
+          <DaiOakesIntelligencePanel reports={daiOakesIntelReports} />
         </div>
 
         <div className="row-4">

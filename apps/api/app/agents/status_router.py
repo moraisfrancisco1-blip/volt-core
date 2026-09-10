@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import AgentInvestigationRecord, AuditRecord, BackOfficeReportRecord, CustomerQueryRecord, CustomerResponseDraftRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, OnboardingRecord, OperationsActivationRequestRecord, SalesLeadRecord, SalesOutreachDraftRecord
-from . import agent_inbox, backoffice_agent, customer_agent, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
+from ..models import AgentInvestigationRecord, AuditRecord, BackOfficeReportRecord, CustomerQueryRecord, CustomerResponseDraftRecord, DaiOakesIntelligenceReportRecord, DealProposalRecord, DealRecord, MarketingContentRecord, MarketIntelligenceReportRecord, MonitoringSweepRecord, OnboardingRecord, OperationsActivationRequestRecord, SalesLeadRecord, SalesOutreachDraftRecord
+from . import agent_inbox, backoffice_agent, customer_agent, dai_oakes_intelligence, deals_agent, market_intelligence, marketing_agent, operations_agent, production_monitor, sales_agent
 
 router = APIRouter(prefix="/api", tags=["agent-status"])
 
@@ -182,6 +182,23 @@ def agents_status() -> list[dict]:
             "state": backoffice_state,
             "last_activity_at": _iso(backoffice_activity),
             "last_status": "failed" if backoffice_state == "error" else ("completed" if backoffice_activity else None),
+        })
+
+        # Dai Oakes Intelligence mirrors Market Intelligence's status (single "last report"
+        # record, weekly digest cadence) -- the two are structurally identical, just reading
+        # different source data (Back Office's own synced snapshots vs. live ENTSO-E/voltaris).
+        dai_oakes_intel_latest = session.scalar(select(DaiOakesIntelligenceReportRecord).order_by(DaiOakesIntelligenceReportRecord.id.desc()))
+        if dai_oakes_intelligence.is_sweep_in_progress():
+            dai_oakes_intel_state = "working"
+        elif dai_oakes_intel_latest is not None and dai_oakes_intel_latest.status == "failed":
+            dai_oakes_intel_state = "error"
+        else:
+            dai_oakes_intel_state = "idle"
+        results.append({
+            "agent": "dai_oakes_intelligence",
+            "state": dai_oakes_intel_state,
+            "last_activity_at": _iso(dai_oakes_intel_latest.completed_at or dai_oakes_intel_latest.created_at) if dai_oakes_intel_latest else None,
+            "last_status": dai_oakes_intel_latest.status if dai_oakes_intel_latest else None,
         })
 
         # Customer mirrors Sales' audit-based status (many queries/drafts touched per

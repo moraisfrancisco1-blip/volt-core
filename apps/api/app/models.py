@@ -332,6 +332,76 @@ class DaiOakesPaymentRecord(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class DaiOakesBookingsSnapshotRecord(Base):
+    # One row per Back Office sweep -- aggregate booking/agenda counts only, from the Dai
+    # Oakes bookings-summary service endpoint. No client name/email/phone/notes; see that
+    # route's own SECURITY MODEL comment on the Dai Oakes side. Append-only history (same
+    # pattern as BackOfficeReportRecord) so trend-over-time is possible later without a
+    # schema change.
+    __tablename__ = "dai_oakes_bookings_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    total_bookings: Mapped[int] = mapped_column(Integer, default=0)
+    today_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_7_days_count: Mapped[int] = mapped_column(Integer, default=0)
+    by_status: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    by_location: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    by_deposit_status: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DaiOakesClientsSnapshotRecord(Base):
+    # One row per Back Office sweep. Deliberately just two bare counts -- no client name,
+    # email, age, or location ever crosses into Volt Core, by construction of the Dai
+    # Oakes clients-summary route (see its own SECURITY MODEL comment).
+    __tablename__ = "dai_oakes_clients_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    total_clients: Mapped[int] = mapped_column(Integer, default=0)
+    new_clients_last_30_days: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DaiOakesSystemHealthSnapshotRecord(Base):
+    # One row per Back Office sweep -- purely operational counts (webhook/email/message
+    # delivery, admin-action volume, login rate-limit hits) from the Dai Oakes
+    # system-health service endpoint. No recipient, actor identity, or free text.
+    __tablename__ = "dai_oakes_system_health_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    webhooks_failed_total: Mapped[int] = mapped_column(Integer, default=0)
+    webhooks_processed_total: Mapped[int] = mapped_column(Integer, default=0)
+    webhooks_failed_last_24h: Mapped[int] = mapped_column(Integer, default=0)
+    emails_sent_last_24h: Mapped[int] = mapped_column(Integer, default=0)
+    emails_failed_last_24h: Mapped[int] = mapped_column(Integer, default=0)
+    messages_sent_last_24h: Mapped[int] = mapped_column(Integer, default=0)
+    messages_failed_last_24h: Mapped[int] = mapped_column(Integer, default=0)
+    admin_actions_last_24h: Mapped[int] = mapped_column(Integer, default=0)
+    login_rate_limit_hits_last_24h: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DaiOakesIntelligenceReportRecord(Base):
+    # Weekly digest produced by the dedicated Dai Oakes Intelligence agent
+    # (agents/dai_oakes_intelligence.py). Unlike Back Office, this agent never calls the Dai
+    # Oakes connector itself -- it only reads the snapshot/payment rows Back Office already
+    # synced into this same database, so it has zero direct network dependency on the Dai
+    # Oakes API. Shape mirrors MarketIntelligenceReportRecord.
+    __tablename__ = "dai_oakes_intelligence_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="completed", index=True)
+    payments_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bookings_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    clients_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    system_health_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alerts_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    turns_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    telegram_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class CustomerQueryRecord(Base):
     __tablename__ = "customer_queries"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
