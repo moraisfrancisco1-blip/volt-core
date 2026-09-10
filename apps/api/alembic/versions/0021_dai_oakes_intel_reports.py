@@ -1,14 +1,19 @@
 """add dai_oakes_intelligence_reports table for the dedicated Dai Oakes Intelligence agent
 
-Revision ID: 0021_dai_oakes_intelligence_reports
+Revision ID: 0021_dai_oakes_intel_reports
 Revises: 0020_dai_oakes_round2_snapshots
 Create Date: 2026-09-10
+
+Note: the original revision id ("0021_dai_oakes_intelligence_reports", 35 chars) exceeded
+alembic_version.version_num's VARCHAR(32) column, which crashed the production deploy
+(psycopg2.errors.StringDataRightTruncation) before uvicorn ever started. Shortened here,
+before this revision had ever successfully applied anywhere.
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0021_dai_oakes_intelligence_reports"
+revision = "0021_dai_oakes_intel_reports"
 down_revision = "0020_dai_oakes_round2_snapshots"
 branch_labels = None
 depends_on = None
