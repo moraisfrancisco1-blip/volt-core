@@ -297,3 +297,38 @@ def test_start_production_monitor_starts_a_thread_when_both_configured(monkeypat
     assert production_monitor._started is True
     assert len(started_threads) == 1
     assert started_threads[0][1] == "volt-core-production-monitor"
+
+
+# --- _seconds_until_sweep_due -- a restart/redeploy must never trigger an extra paid
+# LLM call just because the process happened to restart ----------------------------------
+
+def test_seconds_until_sweep_due_is_zero_when_no_report_exists():
+    with session_scope() as session:
+        session.query(MonitoringSweepRecord).delete()
+    assert production_monitor._seconds_until_sweep_due() == 0.0
+
+
+def test_seconds_until_sweep_due_is_positive_right_after_a_completed_sweep():
+    from datetime import datetime, timezone
+    with session_scope() as session:
+        session.add(MonitoringSweepRecord(system="voltaris-os", environment="production", status="completed", completed_at=datetime.now(timezone.utc)))
+    pending = production_monitor._seconds_until_sweep_due()
+    assert 0 < pending <= production_monitor.SWEEP_INTERVAL_SECONDS
+
+
+def test_seconds_until_sweep_due_is_zero_once_interval_has_elapsed():
+    from datetime import datetime, timedelta, timezone
+    with session_scope() as session:
+        stale = datetime.now(timezone.utc) - timedelta(seconds=production_monitor.SWEEP_INTERVAL_SECONDS + 60)
+        session.add(MonitoringSweepRecord(system="voltaris-os", environment="production", status="completed", completed_at=stale))
+    assert production_monitor._seconds_until_sweep_due() == 0.0
+
+
+def test_seconds_until_sweep_due_ignores_a_failed_sweep_and_retries_immediately():
+    # A failed attempt must never block a retry until the full interval passes -- only a
+    # successful ("completed") sweep counts as having covered this period.
+    from datetime import datetime, timezone
+    with session_scope() as session:
+        session.query(MonitoringSweepRecord).delete()
+        session.add(MonitoringSweepRecord(system="voltaris-os", environment="production", status="failed", completed_at=datetime.now(timezone.utc)))
+    assert production_monitor._seconds_until_sweep_due() == 0.0

@@ -226,3 +226,38 @@ def test_start_dai_oakes_intelligence_starts_a_thread_when_configured(monkeypatc
     assert dai_oakes_intelligence._started is True
     assert len(started_threads) == 1
     assert started_threads[0][1] == "volt-core-dai-oakes-intelligence"
+
+
+# --- _seconds_until_sweep_due -- a restart/redeploy must never trigger an extra paid
+# LLM call just because the process happened to restart ----------------------------------
+
+def test_seconds_until_sweep_due_is_zero_when_no_report_exists():
+    with session_scope() as session:
+        session.query(DaiOakesIntelligenceReportRecord).delete()
+    assert dai_oakes_intelligence._seconds_until_sweep_due() == 0.0
+
+
+def test_seconds_until_sweep_due_is_positive_right_after_a_completed_report():
+    from datetime import datetime, timezone
+    with session_scope() as session:
+        session.add(DaiOakesIntelligenceReportRecord(status="completed", completed_at=datetime.now(timezone.utc)))
+    pending = dai_oakes_intelligence._seconds_until_sweep_due()
+    assert 0 < pending <= dai_oakes_intelligence.SWEEP_INTERVAL_SECONDS
+
+
+def test_seconds_until_sweep_due_is_zero_once_interval_has_elapsed():
+    from datetime import datetime, timedelta, timezone
+    with session_scope() as session:
+        stale = datetime.now(timezone.utc) - timedelta(seconds=dai_oakes_intelligence.SWEEP_INTERVAL_SECONDS + 60)
+        session.add(DaiOakesIntelligenceReportRecord(status="completed", completed_at=stale))
+    assert dai_oakes_intelligence._seconds_until_sweep_due() == 0.0
+
+
+def test_seconds_until_sweep_due_ignores_a_failed_report_and_retries_immediately():
+    # A failed attempt must never block a retry until the full interval passes -- only a
+    # successful ("completed") report counts as having covered this week.
+    from datetime import datetime, timezone
+    with session_scope() as session:
+        session.query(DaiOakesIntelligenceReportRecord).delete()
+        session.add(DaiOakesIntelligenceReportRecord(status="failed", completed_at=datetime.now(timezone.utc)))
+    assert dai_oakes_intelligence._seconds_until_sweep_due() == 0.0

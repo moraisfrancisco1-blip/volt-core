@@ -8,6 +8,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
+
 from .. import llm_client
 from ..db import session_scope
 from ..models import AuditRecord, MonitoringSweepRecord
@@ -205,9 +207,39 @@ def is_sweep_in_progress() -> bool:
     return _sweep_in_progress
 
 
+def _seconds_until_sweep_due() -> float:
+    # Same discipline as market_intelligence.py: a restart/redeploy must never trigger
+    # an extra paid LLM call on its own -- run_sweep() covers every configured system in
+    # one tick, so the most recent completed sweep (any system) is the right anchor. A
+    # failed sweep does not count as covering the interval, so a genuinely broken
+    # integration gets retried on the next restart rather than waiting out the interval.
+    with session_scope() as session:
+        latest = session.scalar(
+            select(MonitoringSweepRecord)
+            .where(MonitoringSweepRecord.status == "completed")
+            .order_by(MonitoringSweepRecord.id.desc())
+        )
+        # Read completed_at while the session is still open -- session_scope's exit
+        # expires/detaches the instance, so touching this attribute after the `with`
+        # block would raise DetachedInstanceError instead of lazily reloading it.
+        completed_at = latest.completed_at if latest is not None else None
+    if completed_at is None:
+        return 0.0
+    if completed_at.tzinfo is None:
+        # sqlite (all local/CI testing) doesn't round-trip tzinfo on DateTime(timezone=
+        # True) columns the way Postgres does -- same naive-datetime guard used
+        # elsewhere in this codebase (e.g. operations_agent.py's recurring-task check).
+        completed_at = completed_at.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - completed_at).total_seconds()
+    return max(0.0, SWEEP_INTERVAL_SECONDS - elapsed)
+
+
 def _sweep_loop() -> None:
     global _sweep_in_progress
     while True:
+        pending = _seconds_until_sweep_due()
+        if pending > 0:
+            time.sleep(pending)
         try:
             _sweep_in_progress = True
             run_sweep()
