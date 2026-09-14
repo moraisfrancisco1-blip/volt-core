@@ -25,8 +25,10 @@ function ProposalRow({ proposal, apiBase, onUpdated }) {
     setTimeout(() => setState('idle'), 4000);
   };
 
-  const isPending = proposal.status === 'pending_approval';
-  const label = state === 'sending' ? 'A ENVIAR…' : state === 'done' ? 'ENVIADO' : state === 'error' ? 'FALHOU' : 'Aprovar e Enviar';
+  const isSendFailed = proposal.status === 'send_failed';
+  const isActionable = proposal.status === 'pending_approval' || isSendFailed;
+  const idleLabel = isSendFailed ? 'Reenviar' : 'Aprovar e Enviar';
+  const label = state === 'sending' ? 'A ENVIAR…' : state === 'done' ? 'ENVIADO' : state === 'error' ? 'FALHOU' : idleLabel;
 
   return (
     <div className="panel-row-item" style={{ padding: 12, marginBottom: 8 }}>
@@ -35,7 +37,10 @@ function ProposalRow({ proposal, apiBase, onUpdated }) {
         <span className="mono feed-item-time">{proposal.price_summary}</span>
       </div>
       <div className="feed-item-text" style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>{proposal.body}</div>
-      {isPending && (
+      {isSendFailed && proposal.error && (
+        <div className="mono feed-item-time" style={{ marginBottom: 8, color: '#d9614f' }}>Falhou: {proposal.error}</div>
+      )}
+      {isActionable && (
         <button
           type="button"
           className="row panel-row-item command-row actionable command-row-button"
@@ -139,7 +144,10 @@ function ExpansionSignalRow({ signal, apiBase, onUpdated }) {
 
 function DealsPanel({ deals, proposals, expansionSignals, apiBase, onProposalUpdated, onDealUpdated, onExpansionSignalUpdated, onSelectDeal }) {
   const stageCounts = STAGE_ORDER.map(stage => ({ stage, count: (deals || []).filter(d => d.stage === stage).length }));
-  const pendingProposals = (proposals || []).filter(p => p.status === 'pending_approval').slice(0, 4);
+  // Includes send_failed -- a proposal that failed to send (e.g. RESEND_API_KEY wasn't
+  // configured yet) still needs human action (retry), so it must not disappear from
+  // this list the way it would if filtered to pending_approval alone.
+  const pendingProposals = (proposals || []).filter(p => p.status === 'pending_approval' || p.status === 'send_failed').slice(0, 4);
   const staleDeals = (deals || []).filter(d => d.stale).slice(0, 4);
   const suggestedDeals = (deals || []).filter(d => d.suggested_stage).slice(0, 4);
   const flaggedExpansions = (expansionSignals || []).filter(s => s.status === 'flagged').slice(0, 4);
