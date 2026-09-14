@@ -17,6 +17,7 @@ import DaiOakesIntelligencePanel from './components/DaiOakesIntelligencePanel.js
 import SalesPanel from './components/SalesPanel.jsx';
 import DealsPanel from './components/DealsPanel.jsx';
 import MarketingPanel from './components/MarketingPanel.jsx';
+import DaiOakesMarketingPanel from './components/DaiOakesMarketingPanel.jsx';
 import OperationsPanel from './components/OperationsPanel.jsx';
 import BackOfficePanel from './components/BackOfficePanel.jsx';
 import CustomerPanel from './components/CustomerPanel.jsx';
@@ -37,7 +38,7 @@ const INVESTIGATIONS_FETCH_LIMIT = 100;
 
 // Mirrors each reactive agent's investigation_type -- kept in sync manually with the
 // backend (apps/api/app/agents/*_runner.py and agents/status_router.py).
-const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations', 'backoffice', 'dai_oakes_intelligence', 'customer'];
+const AGENT_ORDER = ['volt', 'dev_debug', 'database', 'finance', 'production_monitor', 'market_intelligence', 'sales', 'deals', 'marketing', 'operations', 'backoffice', 'dai_oakes_intelligence', 'dai_oakes_marketing', 'customer'];
 const AGENT_LABELS = {
   // O id continua 'volt' (é o que a API devolve); só a etiqueta mudou, para não
   // colidir com o nome do próprio Volt Core. É o investigador de incidentes:
@@ -54,6 +55,7 @@ const AGENT_LABELS = {
   operations: ['OPERATIONS', null],
   backoffice: ['BACK OFFICE', null],
   dai_oakes_intelligence: ['DAI OAKES · INTELIGÊNCIA', null],
+  dai_oakes_marketing: ['DAI OAKES · MARKETING', null],
   customer: ['CUSTOMER', null],
 };
 
@@ -87,6 +89,7 @@ function App() {
   const [expansionSignals, setExpansionSignals] = useState([]);
   const [marketingContent, setMarketingContent] = useState([]);
   const [marketingPerformance, setMarketingPerformance] = useState(null);
+  const [daiOakesMarketingContent, setDaiOakesMarketingContent] = useState([]);
   const [onboardings, setOnboardings] = useState([]);
   const [operationsActivations, setOperationsActivations] = useState([]);
   const [recurringTasks, setRecurringTasks] = useState([]);
@@ -107,7 +110,7 @@ function App() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, expansionSignalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, paymentControlSummaryResponse, paymentControlPaymentsResponse, daiOakesIntelResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
+      const [dashboardResponse, eventsResponse, escalationsResponse, investigationsResponse, sweepsResponse, marketIntelResponse, salesLeadsResponse, salesDraftsResponse, dealsResponse, dealProposalsResponse, expansionSignalsResponse, marketingContentResponse, marketingPerformanceResponse, onboardingsResponse, operationsActivationsResponse, recurringTasksResponse, backofficeReportsResponse, backofficeReconciliationsResponse, paymentControlSummaryResponse, paymentControlPaymentsResponse, daiOakesIntelResponse, daiOakesMarketingResponse, customerQueriesResponse, customerDraftsResponse, customerPatternsResponse, agentsStatusResponse, integrationsStatusResponse] = await Promise.all([
         fetch(`${API}/api/v1/dashboard`, { cache: 'no-store' }),
         fetch(`${API}/api/events?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/escalations?limit=50`, { cache: 'no-store' }),
@@ -129,6 +132,7 @@ function App() {
         fetch(`${API}/api/backoffice/payment-control-summary`, { cache: 'no-store' }),
         fetch(`${API}/api/backoffice/dai-oakes-payments?limit=10`, { cache: 'no-store' }),
         fetch(`${API}/api/dai-oakes-intelligence-reports?limit=10`, { cache: 'no-store' }),
+        fetch(`${API}/api/dai-oakes-marketing-content?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-queries?limit=50`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-response-drafts?limit=20`, { cache: 'no-store' }),
         fetch(`${API}/api/customer-query-patterns?limit=20`, { cache: 'no-store' }),
@@ -156,6 +160,7 @@ function App() {
       if (!paymentControlSummaryResponse.ok) throw new Error(`payment control summary unavailable (${paymentControlSummaryResponse.status})`);
       if (!paymentControlPaymentsResponse.ok) throw new Error(`payment control payments unavailable (${paymentControlPaymentsResponse.status})`);
       if (!daiOakesIntelResponse.ok) throw new Error(`dai oakes intelligence reports unavailable (${daiOakesIntelResponse.status})`);
+      if (!daiOakesMarketingResponse.ok) throw new Error(`dai oakes marketing content unavailable (${daiOakesMarketingResponse.status})`);
       if (!customerQueriesResponse.ok) throw new Error(`customer queries unavailable (${customerQueriesResponse.status})`);
       if (!customerDraftsResponse.ok) throw new Error(`customer response drafts unavailable (${customerDraftsResponse.status})`);
       if (!customerPatternsResponse.ok) throw new Error(`customer query patterns unavailable (${customerPatternsResponse.status})`);
@@ -182,6 +187,7 @@ function App() {
       setPaymentControlSummary(await paymentControlSummaryResponse.json());
       setPaymentControlPayments(await paymentControlPaymentsResponse.json());
       setDaiOakesIntelReports(await daiOakesIntelResponse.json());
+      setDaiOakesMarketingContent(await daiOakesMarketingResponse.json());
       setCustomerQueries(await customerQueriesResponse.json());
       setCustomerDrafts(await customerDraftsResponse.json());
       setCustomerPatterns(await customerPatternsResponse.json());
@@ -235,6 +241,9 @@ function App() {
     } else if (agentId === 'dai_oakes_intelligence') {
       const latest = daiOakesIntelReports[0];
       lastActivityText = latest ? truncate(latest.error || latest.alerts_summary || 'sem resumo') : '';
+    } else if (agentId === 'dai_oakes_marketing') {
+      const latestContent = daiOakesMarketingContent[0];
+      lastActivityText = latestContent ? truncate(latestContent.title || 'sem título') : '';
     } else if (agentId === 'customer') {
       const latestQuery = customerQueries[0];
       lastActivityText = latestQuery ? truncate(`${latestQuery.status === 'sensitive_escalated' ? 'Sinalizado' : 'Triagem'} — ${latestQuery.question}`) : '';
@@ -426,6 +435,15 @@ function App() {
             apiBase={API}
             onContentUpdated={updated => setMarketingContent(prev => prev.map(c => (c.id === updated.id ? updated : c)))}
             onRepurposeRequested={() => setTimeout(load, 4000)}
+            onSelectContent={openContentDetail}
+          />
+        </div>
+
+        <div className="row-4">
+          <DaiOakesMarketingPanel
+            content={daiOakesMarketingContent}
+            apiBase={API}
+            onContentUpdated={updated => setDaiOakesMarketingContent(prev => prev.map(c => (c.id === updated.id ? updated : c)))}
             onSelectContent={openContentDetail}
           />
         </div>
