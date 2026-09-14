@@ -114,6 +114,14 @@ const AGENT_SPEC = {
     tools: ['Base de dados Volt Core · snapshots Dai Oakes'],
     tasks: ['Relatório de inteligência Dai Oakes semanal'],
   },
+  dai_oakes_marketing: {
+    rung: 'proposes',
+    what: 'Escreve conteúdo de marketing para os canais públicos da Dai Oakes (Instagram, Facebook, blog), a partir só do site público real da clínica — nunca de dados de pacientes, nunca inventa serviços/preços não confirmados.',
+    gate: 'O conteúdo fica em pending_approval antes de sair. Aprovar só muda o estado -- publicar continua manual, fora do Volt Core.',
+    creds: ['ANTHROPIC_API_KEY'],
+    tools: ['www.daianeoakes.com (site público, sem autenticação)'],
+    tasks: ['Conteúdo de marketing Dai Oakes'],
+  },
   sales: {
     rung: 'proposes',
     what: 'Qualifica leads e escreve o outreach. Puxa também os tenants reais da VoltarisOS, que entram só para receber boas-vindas.',

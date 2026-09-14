@@ -254,6 +254,26 @@ class MarketingContentRecord(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class DaiOakesMarketingContentRecord(Base):
+    # A completely separate table from marketing_content -- Dai Oakes is a different
+    # business (a physiotherapy clinic), not VoltarisOS, and the two must never share a
+    # table the way every other Dai Oakes integration in this codebase keeps its own
+    # tables. No "audience" column here: unlike VoltarisOS's B2B-vs-consumer split, this
+    # agent has exactly one audience (the clinic's own public/patient-facing channels).
+    # Facts come from the clinic's own public website (no patient data anywhere in this
+    # pipeline) -- see dai_oakes_marketing.py.
+    __tablename__ = "dai_oakes_marketing_content"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    format: Mapped[str] = mapped_column(String(32))  # "instagram_post" | "facebook_post" | "blog_post"
+    title: Mapped[str] = mapped_column(String(255))
+    body: Mapped[str] = mapped_column(Text)
+    source_facts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending_approval", index=True)
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class OnboardingRecord(Base):
     __tablename__ = "onboardings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
