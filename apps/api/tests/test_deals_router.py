@@ -248,6 +248,59 @@ def test_approve_and_send_missing_proposal_returns_404():
         assert response.status_code == 404
 
 
+def test_send_failed_proposal_can_be_retried_and_succeeds(monkeypatch):
+    # A proposal that failed to send (e.g. RESEND_API_KEY wasn't configured yet at the
+    # time) must not be stuck forever -- once the underlying problem is fixed, clicking
+    # the same action again ("Reenviar") must actually retry the send.
+    lead_id = _seed_lead(email="retry-success-deal@example.com")
+    deal_id = _seed_deal(lead_id)
+    proposal_id = _seed_proposal(deal_id, status="send_failed", error="Resend send failed or not configured -- check RESEND_API_KEY/RESEND_FROM")
+    calls = []
+    monkeypatch.setattr(resend_client, "send_email", lambda to, subject, body: calls.append(1) or True)
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/deal-proposals/{proposal_id}/approve-and-send")
+        payload = response.json()
+        assert payload["status"] == "approved_sent"
+        # A successful retry must clear the stale error from the earlier failed attempt.
+        assert payload["error"] is None
+
+    assert len(calls) == 1
+    with session_scope() as session:
+        deal = session.get(DealRecord, deal_id)
+        assert deal.stage == "negotiating"
+
+
+def test_send_failed_proposal_retry_that_fails_again_stays_send_failed(monkeypatch):
+    lead_id = _seed_lead(email="retry-fail-deal@example.com")
+    deal_id = _seed_deal(lead_id)
+    proposal_id = _seed_proposal(deal_id, status="send_failed", error="Resend send failed or not configured -- check RESEND_API_KEY/RESEND_FROM")
+    monkeypatch.setattr(resend_client, "send_email", lambda to, subject, body: False)
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/deal-proposals/{proposal_id}/approve-and-send")
+        payload = response.json()
+        assert payload["status"] == "send_failed"
+        assert payload["error"] is not None
+
+
+def test_approved_sent_proposal_cannot_be_resent(monkeypatch):
+    # Only pending_approval and send_failed are actionable -- an already-sent proposal
+    # must never trigger a second real email, no matter how the endpoint is called.
+    lead_id = _seed_lead(email="already-sent-deal@example.com")
+    deal_id = _seed_deal(lead_id)
+    proposal_id = _seed_proposal(deal_id, status="approved_sent")
+
+    def _forbidden(*a, **k):
+        raise AssertionError("must never resend an already approved_sent proposal")
+
+    monkeypatch.setattr(resend_client, "send_email", _forbidden)
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/deal-proposals/{proposal_id}/approve-and-send")
+        assert response.json()["status"] == "approved_sent"
+
+
 def test_list_proposals_rejects_invalid_status():
     with TestClient(app) as client:
         response = client.get("/api/deal-proposals?status=not-a-real-status")

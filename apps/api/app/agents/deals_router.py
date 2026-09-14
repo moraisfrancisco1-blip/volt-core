@@ -161,14 +161,16 @@ def get_deal_proposal(proposal_id: int) -> dict:
 def approve_and_send_proposal(proposal_id: int) -> dict:
     # The ONLY place in the whole app that ever calls resend_client.send_email for a
     # deal proposal -- reached only by an explicit human click on the dashboard's
-    # "Aprovar e Enviar" button, never from the agent's own sweep. Re-checking status
-    # here (not just trusting the UI) is what makes a double-click harmless instead of
-    # a double-send.
+    # "Aprovar e Enviar"/"Reenviar" button, never from the agent's own sweep. Re-checking
+    # status here (not just trusting the UI) is what makes a double-click harmless
+    # instead of a double-send. "send_failed" is also retryable from here -- a proposal
+    # that failed to send (e.g. RESEND_API_KEY wasn't configured yet) must not be stuck
+    # forever with no way forward once the underlying problem is fixed.
     with session_scope() as session:
         proposal = session.get(DealProposalRecord, proposal_id)
         if proposal is None:
             raise HTTPException(status_code=404, detail="deal proposal not found")
-        if proposal.status != "pending_approval":
+        if proposal.status not in ("pending_approval", "send_failed"):
             return proposal_dict(proposal)
         deal = session.get(DealRecord, proposal.deal_id)
         if deal is None:
@@ -183,6 +185,7 @@ def approve_and_send_proposal(proposal_id: int) -> dict:
         if sent:
             deal.stage = "negotiating"
             deal.stage_changed_at = datetime.now(timezone.utc)
+            proposal.error = None  # clear a stale error from an earlier failed attempt
         else:
             proposal.error = "Resend send failed or not configured -- check RESEND_API_KEY/RESEND_FROM"
         session.add(AuditRecord(type="deal_proposal_approved_and_sent" if sent else "deal_proposal_send_failed", reference_id=str(proposal_id)))
