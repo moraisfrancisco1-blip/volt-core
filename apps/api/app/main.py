@@ -26,6 +26,7 @@ from .agents.market_intelligence_router import router as market_intelligence_rou
 from .agents.dai_oakes_intelligence_router import router as dai_oakes_intelligence_router
 from .agents.dai_oakes_marketing_router import router as dai_oakes_marketing_router
 from .agents.dai_oakes_operations_router import router as dai_oakes_operations_router
+from .agents.governance_router import router as governance_router
 from .agents.sales_router import router as sales_router
 from .agents.deals_router import router as deals_router
 from .agents.marketing_router import router as marketing_router
@@ -52,6 +53,7 @@ app.include_router(market_intelligence_router)
 app.include_router(dai_oakes_intelligence_router)
 app.include_router(dai_oakes_marketing_router)
 app.include_router(dai_oakes_operations_router)
+app.include_router(governance_router)
 app.include_router(sales_router)
 app.include_router(deals_router)
 app.include_router(marketing_router)

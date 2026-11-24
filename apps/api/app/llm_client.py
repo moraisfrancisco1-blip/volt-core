@@ -47,6 +47,10 @@ class LLMConfigError(LLMError):
     """No provider API key configured, or an invalid VOLT_LLM_PROVIDER override."""
 
 
+class LLMBudgetError(LLMError):
+    """Raised before a call when a configured daily budget (usage_ledger) is exhausted."""
+
+
 class LLMCallError(LLMError):
     """The underlying provider HTTP call failed (network error, non-2xx, bad JSON)."""
 
@@ -199,9 +203,18 @@ class LLMClient:
         # block (a persona, a README/docs dump) across multiple calls in the same sweep,
         # so the Anthropic API can serve the repeated prefix from its prompt cache at a
         # fraction of the input-token cost instead of re-billing it in full every time.
+        from . import usage_ledger  # lazy: usage_ledger imports db/models, llm_client must stay import-light
+
+        reason = usage_ledger.budget_exceeded()
+        if reason:
+            raise LLMBudgetError(reason)
+        agent = usage_ledger.caller_agent()
         if self.provider == "anthropic":
-            return self._call_anthropic(model, max_tokens, system, messages, tools, tool_choice)
-        return self._call_openai_compatible(model, max_tokens, system, messages, tools, tool_choice)
+            response = self._call_anthropic(model, max_tokens, system, messages, tools, tool_choice)
+        else:
+            response = self._call_openai_compatible(model, max_tokens, system, messages, tools, tool_choice)
+        usage_ledger.record_usage(agent=agent, model=model, input_tokens=response.input_tokens, output_tokens=response.output_tokens)
+        return response
 
     def _call_anthropic(self, model: str, max_tokens: int, system: str | list[dict], messages: list[dict], tools: list[dict], tool_choice: str | None) -> ModelResponse:
         kwargs: dict[str, Any] = dict(model=model, max_tokens=max_tokens, system=system, tools=tools, messages=messages)
