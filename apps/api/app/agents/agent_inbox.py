@@ -64,10 +64,11 @@ def _dispatch(message_type: str, payload: dict[str, Any]) -> None:
         from . import runner
         from .tools import InvestigationJob
         runner.run_investigation(InvestigationJob(**payload))
-    elif message_type in ("cost_report", "output_audit", "approvals_rollup", "daily_briefing"):
+    elif message_type in ("cost_report", "output_audit", "approvals_rollup", "daily_briefing", "project_steward"):
         from . import chief_of_staff
         {"cost_report": chief_of_staff.run_cost_report, "output_audit": chief_of_staff.run_output_audit,
-         "approvals_rollup": chief_of_staff.run_approvals_rollup, "daily_briefing": chief_of_staff.run_daily_briefing}[message_type](payload)
+         "approvals_rollup": chief_of_staff.run_approvals_rollup, "daily_briefing": chief_of_staff.run_daily_briefing,
+         "project_steward": chief_of_staff.run_project_steward}[message_type](payload)
     else:
         raise TypeError(f"unroutable message_type: {message_type}")
 

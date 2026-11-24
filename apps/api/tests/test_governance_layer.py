@@ -144,6 +144,9 @@ def test_daily_cycle_runs_inline_when_inbox_worker_is_not_running(monkeypatch):
 
 
 def test_daily_cycle_posts_in_order_when_worker_running(monkeypatch):
+    from app.models import ProjectRecord
+    with session_scope() as s:
+        s.query(ProjectRecord).delete()
     posted = []
     monkeypatch.setattr(agent_inbox, "_started", True)
     monkeypatch.setattr(agent_inbox, "post_message", lambda **kw: posted.append(kw["message_type"]))

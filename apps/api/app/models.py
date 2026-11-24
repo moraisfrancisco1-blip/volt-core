@@ -325,6 +325,56 @@ class DailyBriefingRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ProjectRecord(Base):
+    # A project Volt Core knows about and gives its own steward agent. repo_confirmed=False
+    # marks a repo mapping that was inferred, not stated by Francisco -- the steward still
+    # runs but the briefing says the mapping is unconfirmed.
+    __tablename__ = "projects"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(32), default="product")  # product | client_site | tool | experiment
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active | paused
+    repo: Mapped[str | None] = mapped_column(String(160), nullable=True)  # "owner/name"
+    repo_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    deploy_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expect_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class KBEntryRecord(Base):
+    # Shared knowledge base. project_key NULL = shared across every project/agent.
+    # Content is secret-scanned (output_auditor.secret_checker) before it is stored.
+    __tablename__ = "kb_entries"
+    __table_args__ = (UniqueConstraint("project_key", "source", name="uq_kb_project_source"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(200), nullable=True)  # "manual" entries leave this NULL; synced ones use "repo:<path>"
+    source_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active | archived
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ProjectHealthRecord(Base):
+    __tablename__ = "project_health"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_key: Mapped[str] = mapped_column(String(64), index=True)
+    pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    days_since_push: Mapped[float | None] = mapped_column(Float, nullable=True)
+    open_prs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    oldest_pr_days: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ci_state: Mapped[str | None] = mapped_column(String(16), nullable=True)  # passing | failing | pending | none | unknown
+    is_public: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    flags: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class OnboardingRecord(Base):
     __tablename__ = "onboardings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

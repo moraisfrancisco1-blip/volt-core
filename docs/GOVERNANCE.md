@@ -19,3 +19,16 @@ With an LLM key configured the cycle goes through the agent inbox (FIFO, so the 
 - `VOLT_APPROVALS_STALE_HOURS` (default 48).
 
 Nothing is enabled by default: with none of these set, existing agents behave exactly as before, apart from one extra row written per LLM call.
+
+## Shared knowledge base and project stewards
+
+**Projects.** `POST /api/projects/seed-defaults` registers the known projects (idempotent, explicit, never automatic). Some repo mappings are inferred and stored with `repo_confirmed=false` (Mesa de Funding and the Dai Oakes public site have no repo yet). Add or fix one with `POST /api/projects`.
+
+**Knowledge base** (`/api/kb/*`). Entries are shared (`project_key` empty) or belong to one project; a project's search also sees the shared ones. Search is plain term scoring: no LLM, no embeddings. Every write, manual or synced, runs `secret_checker` first; a hit refuses the write, names the rule and stores nothing. Agents can call `knowledge_base.context_for(project_key, query)` to get relevant snippets.
+
+**Project stewards** (one per active project, identity `project:<key>`, no LLM, read-only on GitHub):
+- `repo_health_checker`: days since last push, open PRs and the oldest one, CI state from check runs.
+- `exposure_checker`: flags a public repo unless the project has `expect_public` set.
+- `kb_sync`: copies `README.md`, `CLAUDE.md`, `AGENTS.md` and `docs/*.md` into the knowledge base (max 12 files, skips `.env`, keys and other sensitive paths, re-downloads only when the blob SHA changed).
+
+The daily cycle runs the stewards after the department sub-agents and before the briefing, and a failing steward never stops the briefing. Needs `GITHUB_TOKEN` for private repos; without it they show as `repo_unreachable`. `VOLT_PROJECT_STALE_DAYS` (default 30) sets when a repo counts as stale.
