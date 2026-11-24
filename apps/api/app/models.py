@@ -274,6 +274,19 @@ class DaiOakesMarketingContentRecord(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class DaiOakesOperationsInsightRecord(Base):
+    # Advisory-only signals derived from the aggregate bookings snapshots the Back Office
+    # sweep already stores. No LLM, no network call, no client-level data: the inputs are
+    # counts by status/location/deposit, so the outputs can only ever be counts and ratios.
+    __tablename__ = "dai_oakes_operations_insights"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(48), index=True)
+    severity: Mapped[str] = mapped_column(String(16))  # "info" | "attention"
+    message: Mapped[str] = mapped_column(Text)
+    snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class OnboardingRecord(Base):
     __tablename__ = "onboardings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
