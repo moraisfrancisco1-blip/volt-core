@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any
-from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -284,6 +284,44 @@ class DaiOakesOperationsInsightRecord(Base):
     severity: Mapped[str] = mapped_column(String(16))  # "info" | "attention"
     message: Mapped[str] = mapped_column(Text)
     snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LLMUsageRecord(Base):
+    # One row per LLM call, written by llm_client. Tokens are always real (from the
+    # provider response); cost is NEVER stored -- it is derived at report time from
+    # VOLT_LLM_PRICES so a stale or missing price can never be baked into history.
+    __tablename__ = "llm_usage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent: Mapped[str] = mapped_column(String(64), index=True)
+    model: Mapped[str] = mapped_column(String(96))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class OutputAuditFindingRecord(Base):
+    # Findings from the Output Auditor over pending drafts. Never stores the matched
+    # text for secret/PII rules (only the rule name), so the audit trail can't leak
+    # what it flags. Unique per (source, source_id, rule) so re-scans are idempotent.
+    __tablename__ = "output_audit_findings"
+    __table_args__ = (UniqueConstraint("source", "source_id", "rule", name="uq_output_audit_source_rule"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(48), index=True)
+    source_id: Mapped[int] = mapped_column(Integer)
+    rule: Mapped[str] = mapped_column(String(48))
+    severity: Mapped[str] = mapped_column(String(16))  # "critical" | "attention"
+    excerpt: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)  # "open" | "dismissed"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DailyBriefingRecord(Base):
+    __tablename__ = "daily_briefings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    summary: Mapped[str] = mapped_column(Text)
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    attention_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

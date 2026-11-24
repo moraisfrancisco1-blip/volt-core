@@ -64,6 +64,10 @@ def _dispatch(message_type: str, payload: dict[str, Any]) -> None:
         from . import runner
         from .tools import InvestigationJob
         runner.run_investigation(InvestigationJob(**payload))
+    elif message_type in ("cost_report", "output_audit", "approvals_rollup", "daily_briefing"):
+        from . import chief_of_staff
+        {"cost_report": chief_of_staff.run_cost_report, "output_audit": chief_of_staff.run_output_audit,
+         "approvals_rollup": chief_of_staff.run_approvals_rollup, "daily_briefing": chief_of_staff.run_daily_briefing}[message_type](payload)
     else:
         raise TypeError(f"unroutable message_type: {message_type}")
 
@@ -119,6 +123,12 @@ def _worker_loop() -> None:
         finally:
             _current_message_type = None
             _mark_completed(message_id, error)
+
+
+def is_worker_running() -> bool:
+    # The worker only starts when an LLM provider is configured (see below), so with the API
+    # paused nothing consumes the inbox. Deterministic agents use this to run inline instead.
+    return _started
 
 
 def start_agent_inbox_worker() -> None:
